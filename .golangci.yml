@@ -1,0 +1,61 @@
+run:
+  go: '1.24'
+
+linters:
+  disable-all: true
+  enable:
+    - revive
+    - staticcheck
+
+linters-settings:
+  revive:
+    rules:
+      - name: exported
+        arguments:
+          - "disableStutteringCheck"
+
+issues:
+  exclude-use-default: false
+  exclude-files:
+    - '.*\.pb\.go$'
+    - '.*mock_test\.go$'
+    - 'internal/testutil/funcmock\.go'
+    - 'internal/btree/btree\.go'
+    - 'httpreplay/internal/proxy/debug\.go'
+    - 'third_party/pkgsite/synopsis\.go'
+  exclude-dirs:
+    - 'go-cloud-debug-agent'
+    - 'internal/backoff'
+    - 'internal/trace'
+    - 'internal/gapicgen/generator'
+    - 'internal/generated/snippets'
+    - 'third_party/go/doc'
+  exclude-rules:
+    - path: 'pubsub/pstest/fake\.go'
+      text: 'should have comment or be unexported'
+    - path: 'pubsub/subscription\.go'
+      text: 'type name will be used as pubsub\.PubsubWrapper by other packages'
+    - path: 'spanner/spansql/(sql|types)\.go'
+      text: 'should have comment'
+  exclude:
+    - 'gen\.go'
+    - 'receiver name [a-zA-Z]+[0-9]* should be consistent with previous receiver name'
+    - 'exported const AllUsers|AllAuthenticatedUsers|RoleOwner|SSD|HDD|PRODUCTION|DEVELOPMENT should have comment'
+    - 'exported func Value returns unexported type pretty\.val, which can be annoying to use'
+    - 'exported func \(Increment|FieldTransformIncrement|FieldTransformMinimum|FieldTransformMaximum\) returns unexported type firestore\.transform, which can be annoying to use'
+    - 'ExecuteStreamingSql'
+    - 'MethodExecuteSql should be MethodExecuteSQL'
+    - ' executeStreamingSql\(Min|Rnd\)Time'
+    - ' executeSql\(Min|Rnd\)Time'
+    - 'ClusterId'
+    - 'InstanceId'
+    - 'firestore\.arrayUnion'
+    - 'firestore\.arrayRemove'
+    - 'maxAttempts'
+    - 'firestore\.commitResponse'
+    - 'UptimeCheckIpIterator'
+    - 'apiv[0-9]+'
+    - 'ALL_CAPS'
+    - 'a blank import should be only in a main or test package'
+    - 'method ExecuteSql should be ExecuteSQL'
+    - 'SA1019'

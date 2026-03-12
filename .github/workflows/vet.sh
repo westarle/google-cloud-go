@@ -87,4 +87,10 @@ staticcheck -go 1.25 ./... 2>&1 | (
 ) |
   tee /dev/stderr | (! read)
 
+# Prototype: Install and run golangci-lint side-by-side
+if ! command -v golangci-lint &> /dev/null; then
+  go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.59.1
+fi
+golangci-lint run
+
 echo "Done vetting!"
