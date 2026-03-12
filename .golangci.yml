@@ -44,7 +44,7 @@ issues:
     - 'exported func Value returns unexported type pretty\.val, which can be annoying to use'
     - 'exported func \(Increment|FieldTransformIncrement|FieldTransformMinimum|FieldTransformMaximum\) returns unexported type firestore\.transform, which can be annoying to use'
     - 'ExecuteStreamingSql'
-    - 'MethodExecuteSql should be MethodExecuteSQL'
+    - 'MethodExecuteSql'
     - ' executeStreamingSql\(Min|Rnd\)Time'
     - ' executeSql\(Min|Rnd\)Time'
     - 'ClusterId'
