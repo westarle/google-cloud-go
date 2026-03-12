@@ -6,6 +6,8 @@ linters:
   enable:
     - revive
     - staticcheck
+    - gofmt
+    - goimports
 
 linters-settings:
   revive:
