@@ -21,17 +21,15 @@ set -x
 
 # Fail if a dependency was added without the necessary go.mod/go.sum change
 # being part of the commit.
-go mod tidy
 for i in $(find . -name go.mod); do
+  # Ignore generated snippets
+  if [[ "$i" == *"internal/generated/snippets"* ]]; then
+    continue
+  fi
   pushd $(dirname $i)
-  go mod tidy
+  go mod tidy -diff
   popd
 done
-
-# Documentation for the :^ pathspec can be found at:
-# https://git-scm.com/docs/gitglossary#Documentation/gitglossary.txt-aiddefpathspecapathspec
-git diff '*go.mod' :^internal/generated/snippets | tee /dev/stderr | (! read)
-git diff '*go.sum' :^internal/generated/snippets | tee /dev/stderr | (! read)
 
 goimports -l . 2>&1 | grep -vE ".pb.go" | tee /dev/stderr | (! read)
 
