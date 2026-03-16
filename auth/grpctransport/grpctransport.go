@@ -37,6 +37,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	grpccreds "google.golang.org/grpc/credentials"
@@ -462,18 +463,23 @@ func addOpenTelemetryStatsHandler(dialOpts []grpc.DialOption, opts *Options) []g
 	if opts.DisableTelemetry {
 		return dialOpts
 	}
-	if !gax.IsFeatureEnabled("TRACING") {
+	if !gax.IsFeatureEnabled("TRACING") && !gax.IsFeatureEnabled("LOGGING") {
 		return append(dialOpts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
 	}
 	var staticAttrs []attribute.KeyValue
+	var staticLogAttrs []slog.Attr
 	if opts.InternalOptions != nil {
 		staticAttrs = transport.StaticTelemetryAttributes(opts.InternalOptions.TelemetryAttributes)
+		for _, attr := range staticAttrs {
+			staticLogAttrs = append(staticLogAttrs, slog.String(string(attr.Key), attr.Value.AsString()))
+		}
 	}
 	otelOpts := []otelgrpc.Option{
 		otelgrpc.WithSpanAttributes(staticAttrs...),
 	}
 	return append(dialOpts, grpc.WithStatsHandler(&otelHandler{
-		Handler: otelgrpc.NewClientHandler(otelOpts...),
+		Handler:     otelgrpc.NewClientHandler(otelOpts...),
+		staticAttrs: staticLogAttrs,
 	}))
 }
 
@@ -481,6 +487,7 @@ func addOpenTelemetryStatsHandler(dialOpts []grpc.DialOption, opts *Options) []g
 // adds custom Google Cloud-specific attributes to spans and metrics.
 type otelHandler struct {
 	stats.Handler
+	staticAttrs []slog.Attr
 }
 
 // TagRPC intercepts the RPC start to extract dynamic attributes like resource
@@ -515,13 +522,23 @@ func (h *otelHandler) HandleRPC(ctx context.Context, s stats.RPCStats) {
 		h.Handler.HandleRPC(ctx, s)
 		return
 	}
+
 	span := trace.SpanFromContext(ctx)
-	if !span.IsRecording() {
+
+	var logger *slog.Logger
+	var logEnabled bool
+	if gax.IsFeatureEnabled("LOGGING") {
+		if l, ok := callctx.LoggerFromContext(ctx); ok && l != nil && l.Enabled(ctx, slog.LevelInfo) {
+			logger = l
+			logEnabled = true
+		}
+	}
+
+	if !span.IsRecording() && !logEnabled {
 		h.Handler.HandleRPC(ctx, s)
 		return
 	}
 
-	var attrs []attribute.KeyValue
 	if end.Error != nil {
 		st, ok := status.FromError(end.Error)
 		rpcStatusCode := codeToCanonicalStr(st.Code())
@@ -549,18 +566,56 @@ func (h *otelHandler) HandleRPC(ctx context.Context, s stats.RPCStats) {
 			errorType = rpcStatusCode
 		}
 
-		attrs = []attribute.KeyValue{
-			attribute.String("error.type", errorType),
-			attribute.String("status.message", st.Message()),
-			attribute.String("rpc.response.status_code", rpcStatusCode),
-			attribute.String("exception.type", fmt.Sprintf("%T", end.Error)),
+		if logEnabled {
+			baseLogAttrs := []slog.Attr{
+				slog.String("rpc.system", "grpc"),
+				slog.String("error.type", errorType),
+				slog.String("rpc.response.status_code", rpcStatusCode),
+			}
+			baseLogAttrs = append(baseLogAttrs, h.staticAttrs...)
+
+			msg := st.Message()
+			if msg == "" {
+				msg = "API call failed"
+			}
+
+			details := st.Details()
+			if len(details) == 0 {
+				logger.LogAttrs(ctx, slog.LevelInfo, msg, baseLogAttrs...)
+			} else {
+				for _, d := range details {
+					detailAttrs := make([]slog.Attr, len(baseLogAttrs))
+					copy(detailAttrs, baseLogAttrs)
+
+					if ei, ok := d.(*errdetails.ErrorInfo); ok {
+						detailAttrs = append(detailAttrs, slog.String("error.domain", ei.GetDomain()))
+						detailAttrs = append(detailAttrs, slog.String("error.reason", ei.GetReason()))
+						for k, v := range ei.GetMetadata() {
+							detailAttrs = append(detailAttrs, slog.String("error.metadata."+k, v))
+						}
+					}
+					logger.LogAttrs(ctx, slog.LevelInfo, msg, detailAttrs...)
+				}
+			}
+		}
+
+		if span.IsRecording() {
+			attrs := []attribute.KeyValue{
+				attribute.String("error.type", errorType),
+				attribute.String("status.message", st.Message()),
+				attribute.String("rpc.response.status_code", rpcStatusCode),
+				attribute.String("exception.type", fmt.Sprintf("%T", end.Error)),
+			}
+			span.SetAttributes(attrs...)
 		}
 	} else {
-		attrs = []attribute.KeyValue{
-			attribute.String("rpc.response.status_code", "OK"),
+		if span.IsRecording() {
+			attrs := []attribute.KeyValue{
+				attribute.String("rpc.response.status_code", "OK"),
+			}
+			span.SetAttributes(attrs...)
 		}
 	}
-	span.SetAttributes(attrs...)
 	h.Handler.HandleRPC(ctx, s)
 }
 

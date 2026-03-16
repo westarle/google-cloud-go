@@ -15,9 +15,12 @@
 package grpctransport
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,6 +37,7 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/stats"
 	"google.golang.org/grpc/status"
 
 	echo "cloud.google.com/go/auth/grpctransport/testdata"
@@ -611,3 +615,58 @@ func TestDial_OpenTelemetry_Disabled(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleRPC_ActionableErrors(t *testing.T) {
+	gax.TestOnlyResetIsFeatureEnabled()
+	defer gax.TestOnlyResetIsFeatureEnabled()
+	t.Setenv("GOOGLE_SDK_GO_EXPERIMENTAL_LOGGING", "true")
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
+	ctx := callctx.WithLoggerContext(context.Background(), logger)
+
+	staticLogAttrs := []slog.Attr{
+		slog.String("gcp.client.version", "1.2.3"),
+	}
+
+	h := &otelHandler{
+		Handler:     &mockStatsHandler{},
+		staticAttrs: staticLogAttrs,
+	}
+
+	st := status.New(grpccodes.Unavailable, "network timeout")
+	rs := &stats.End{Error: st.Err()}
+
+	h.HandleRPC(ctx, rs)
+
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, `"error.type":"UNAVAILABLE"`) {
+		t.Errorf("Expected log to contain error.type, got: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, `"msg":"network timeout"`) {
+		t.Errorf("Expected log to contain network timeout as msg, got: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, `"rpc.response.status_code":"UNAVAILABLE"`) {
+		t.Errorf("Expected log to contain rpc.response.status_code, got: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, `"rpc.system":"grpc"`) {
+		t.Errorf("Expected log to contain rpc.system, got: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, `"gcp.client.version":"1.2.3"`) {
+		t.Errorf("Expected log to contain gcp.client.version, got: %s", logOutput)
+	}
+}
+
+type mockStatsHandler struct{}
+
+func (m *mockStatsHandler) TagRPC(ctx context.Context, info *stats.RPCTagInfo) context.Context {
+	return ctx
+}
+
+func (m *mockStatsHandler) HandleRPC(ctx context.Context, rs stats.RPCStats) {}
+
+func (m *mockStatsHandler) TagConn(ctx context.Context, info *stats.ConnTagInfo) context.Context {
+	return ctx
+}
+
+func (m *mockStatsHandler) HandleConn(ctx context.Context, cs stats.ConnStats) {}
