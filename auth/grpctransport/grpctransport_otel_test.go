@@ -652,7 +652,7 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 	if strings.Count(logOutput, "\n") > 1 && logOutput != "" {
 		t.Errorf("Expected exactly 1 log record, got multiple: %s", logOutput)
 	}
-	if !strings.Contains(logOutput, `"error.type":"UNAVAILABLE"`) {
+	if !strings.Contains(logOutput, `"error.type":"RATE_LIMIT_EXCEEDED"`) {
 		t.Errorf("Expected log to contain error.type, got: %s", logOutput)
 	}
 	if !strings.Contains(logOutput, `"msg":"network timeout"`) {
@@ -661,20 +661,34 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 	if !strings.Contains(logOutput, `"rpc.response.status_code":"UNAVAILABLE"`) {
 		t.Errorf("Expected log to contain rpc.response.status_code, got: %s", logOutput)
 	}
-	if !strings.Contains(logOutput, `"rpc.system":"grpc"`) {
-		t.Errorf("Expected log to contain rpc.system, got: %s", logOutput)
+	if !strings.Contains(logOutput, `"rpc.system.name":"grpc"`) {
+		t.Errorf("Expected log to contain rpc.system.name, got: %s", logOutput)
 	}
 	if !strings.Contains(logOutput, `"gcp.client.version":"1.2.3"`) {
 		t.Errorf("Expected log to contain gcp.client.version, got: %s", logOutput)
 	}
-	if !strings.Contains(logOutput, `"error.reason":"RATE_LIMIT_EXCEEDED"`) {
-		t.Errorf("Expected log to contain error.reason, got: %s", logOutput)
+	if !strings.Contains(logOutput, `"gcp.errors.domain":"googleapis.com"`) {
+		t.Errorf("Expected log to contain gcp.errors.domain, got: %s", logOutput)
 	}
-	if !strings.Contains(logOutput, `"error.domain":"googleapis.com"`) {
-		t.Errorf("Expected log to contain error.domain, got: %s", logOutput)
+	if !strings.Contains(logOutput, `"gcp.errors.metadata.quota_limit":"100"`) {
+		t.Errorf("Expected log to contain gcp.errors.metadata.quota_limit, got: %s", logOutput)
 	}
-	if !strings.Contains(logOutput, `"error.metadata.quota_limit":"100"`) {
-		t.Errorf("Expected log to contain error.metadata.quota_limit, got: %s", logOutput)
+	logBuf.Reset()
+
+	ctx, cancel := context.WithDeadline(ctx, time.Now().Add(-1*time.Second))
+	defer cancel()
+
+	h.HandleRPC(ctx, &stats.End{Error: context.DeadlineExceeded})
+	logOutput = logBuf.String()
+
+	if !strings.Contains(logOutput, `"error.type":"CLIENT_TIMEOUT"`) {
+		t.Errorf("Expected log to contain CLIENT_TIMEOUT, got: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, `"exception.type":"context.deadlineExceededError"`) {
+		t.Errorf("Expected log to contain exception.type for context error, got: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, `"exception.message":"context deadline exceeded"`) {
+		t.Errorf("Expected log to contain exception.message for context error, got: %s", logOutput)
 	}
 }
 
