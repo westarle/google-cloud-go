@@ -480,6 +480,7 @@ func addOpenTelemetryStatsHandler(dialOpts []grpc.DialOption, opts *Options) []g
 	return append(dialOpts, grpc.WithStatsHandler(&otelHandler{
 		Handler:     otelgrpc.NewClientHandler(otelOpts...),
 		staticAttrs: staticLogAttrs,
+		logger:      opts.Logger,
 	}))
 }
 
@@ -488,6 +489,7 @@ func addOpenTelemetryStatsHandler(dialOpts []grpc.DialOption, opts *Options) []g
 type otelHandler struct {
 	stats.Handler
 	staticAttrs []slog.Attr
+	logger      *slog.Logger
 }
 
 // TagRPC intercepts the RPC start to extract dynamic attributes like resource
@@ -527,7 +529,7 @@ func (h *otelHandler) HandleRPC(ctx context.Context, s stats.RPCStats) {
 
 	var logger *slog.Logger
 	if gax.IsFeatureEnabled("LOGGING") {
-		if l, ok := callctx.LoggerFromContext(ctx); ok && l != nil && l.Enabled(ctx, slog.LevelInfo) {
+		if l := h.logger; l != nil && l.Enabled(ctx, slog.LevelDebug) {
 			logger = l
 		}
 	}
@@ -575,6 +577,7 @@ func (h *otelHandler) handleRPCError(ctx context.Context, span trace.Span, logge
 	var apiErr *apierror.APIError
 	if parsedErr, parsedOk := apierror.ParseError(end.Error, false); parsedOk {
 		apiErr = parsedErr
+		// If there's an actionable error, the reason takes precedence over our calculated error type.
 		if reason := apiErr.Reason(); reason != "" {
 			errorType = reason
 		}
@@ -611,9 +614,6 @@ func logActionableError(ctx context.Context, logger *slog.Logger, st *status.Sta
 	}
 	baseLogAttrs = append(baseLogAttrs, staticAttrs...)
 
-	if resName, ok := callctx.TelemetryFromContext(ctx, "resource_name"); ok {
-		baseLogAttrs = append(baseLogAttrs, slog.String("gcp.resource.destination.id", resName))
-	}
 	if resendCountStr, ok := callctx.TelemetryFromContext(ctx, "resend_count"); ok {
 		if count, e := strconv.Atoi(resendCountStr); e == nil {
 			baseLogAttrs = append(baseLogAttrs, slog.Int64("gcp.grpc.resend_count", int64(count)))
@@ -629,18 +629,7 @@ func logActionableError(ctx context.Context, logger *slog.Logger, st *status.Sta
 		}
 	}
 
-	if apiErr != nil {
-		if domain := apiErr.Domain(); domain != "" {
-			baseLogAttrs = append(baseLogAttrs, slog.String("gcp.errors.domain", domain))
-		}
-		for k, v := range apiErr.Metadata() {
-			baseLogAttrs = append(baseLogAttrs, slog.String("gcp.errors.metadata."+k, v))
-		}
-	}
-
-	baseLogAttrs = append(baseLogAttrs, slog.String("error.type", errorType))
-
-	logger.LogAttrs(ctx, slog.LevelInfo, msg, baseLogAttrs...)
+	transport.LogActionableError(ctx, logger, errorType, msg, baseLogAttrs, apiErr)
 }
 
 // codeToCanonicalStr returns the canonical name for each of the 17 gRPC

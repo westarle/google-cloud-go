@@ -623,7 +623,7 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 	t.Setenv("GOOGLE_SDK_GO_EXPERIMENTAL_LOGGING", "true")
 
 	var logBuf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	ctx := callctx.WithLoggerContext(context.Background(), logger)
 
 	staticLogAttrs := []slog.Attr{
@@ -633,6 +633,7 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 	h := &otelHandler{
 		Handler:     &mockStatsHandler{},
 		staticAttrs: staticLogAttrs,
+		logger:      logger,
 	}
 
 	st := status.New(grpccodes.Unavailable, "network timeout")
