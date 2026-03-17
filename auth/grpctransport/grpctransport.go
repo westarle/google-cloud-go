@@ -32,12 +32,12 @@ import (
 	"cloud.google.com/go/auth/internal/transport"
 	"cloud.google.com/go/auth/internal/transport/headers"
 	"github.com/googleapis/gax-go/v2"
+	"github.com/googleapis/gax-go/v2/apierror"
 	"github.com/googleapis/gax-go/v2/callctx"
 	"github.com/googleapis/gax-go/v2/internallog"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
-	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	grpccreds "google.golang.org/grpc/credentials"
@@ -572,8 +572,16 @@ func (h *otelHandler) handleRPCError(ctx context.Context, span trace.Span, logge
 		errorType = rpcStatusCode
 	}
 
+	var apiErr *apierror.APIError
+	if parsedErr, parsedOk := apierror.ParseError(end.Error, false); parsedOk {
+		apiErr = parsedErr
+		if reason := apiErr.Reason(); reason != "" {
+			errorType = reason
+		}
+	}
+
 	if logger != nil {
-		logActionableError(ctx, logger, st, errorType, rpcStatusCode, h.staticAttrs, end.Error, ok)
+		logActionableError(ctx, logger, st, errorType, rpcStatusCode, h.staticAttrs, end.Error, apiErr, ok)
 	}
 
 	if span.IsRecording() {
@@ -596,7 +604,7 @@ func (h *otelHandler) handleRPCSuccess(span trace.Span) {
 	}
 }
 
-func logActionableError(ctx context.Context, logger *slog.Logger, st *status.Status, errorType string, rpcStatusCode string, staticAttrs []slog.Attr, err error, isStatusOk bool) {
+func logActionableError(ctx context.Context, logger *slog.Logger, st *status.Status, errorType string, rpcStatusCode string, staticAttrs []slog.Attr, err error, apiErr *apierror.APIError, isStatusOk bool) {
 	baseLogAttrs := []slog.Attr{
 		slog.String("rpc.system.name", "grpc"),
 		slog.String("rpc.response.status_code", rpcStatusCode),
@@ -621,15 +629,12 @@ func logActionableError(ctx context.Context, logger *slog.Logger, st *status.Sta
 		}
 	}
 
-	details := st.Details()
-	for _, d := range details {
-		if ei, ok := d.(*errdetails.ErrorInfo); ok {
-			errorType = ei.GetReason()
-			baseLogAttrs = append(baseLogAttrs, slog.String("gcp.errors.domain", ei.GetDomain()))
-			for k, v := range ei.GetMetadata() {
-				baseLogAttrs = append(baseLogAttrs, slog.String("gcp.errors.metadata."+k, v))
-			}
-			break
+	if apiErr != nil {
+		if domain := apiErr.Domain(); domain != "" {
+			baseLogAttrs = append(baseLogAttrs, slog.String("gcp.errors.domain", domain))
+		}
+		for k, v := range apiErr.Metadata() {
+			baseLogAttrs = append(baseLogAttrs, slog.String("gcp.errors.metadata."+k, v))
 		}
 	}
 
