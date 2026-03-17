@@ -7,7 +7,7 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/google/s2a-go v0.1.9
 	github.com/googleapis/enterprise-certificate-proxy v0.3.14
-	github.com/googleapis/gax-go/v2 v2.18.0
+	github.com/googleapis/gax-go/v2 v2.19.0
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.61.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.61.0
 	go.opentelemetry.io/otel v1.42.0
@@ -35,5 +35,3 @@ require (
 	golang.org/x/text v0.35.0 // indirect
 	google.golang.org/api v0.272.0 // indirect
 )
-
-replace github.com/googleapis/gax-go/v2 => ../../gax-go/v2
