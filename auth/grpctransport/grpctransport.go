@@ -25,7 +25,6 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 
 	"cloud.google.com/go/auth"
 	"cloud.google.com/go/auth/credentials"
@@ -491,13 +490,10 @@ type otelHandler struct {
 	staticAttrs []slog.Attr
 }
 
-type rpcMethodKey struct{}
-
 // TagRPC intercepts the RPC start to extract dynamic attributes like resource
 // name and retry count from the outgoing context metadata and attach them to
 // the current span.
 func (h *otelHandler) TagRPC(ctx context.Context, info *stats.RPCTagInfo) context.Context {
-	ctx = context.WithValue(ctx, rpcMethodKey{}, info.FullMethodName)
 	ctx = h.Handler.TagRPC(ctx, info)
 	span := trace.SpanFromContext(ctx)
 	if !span.IsRecording() {
@@ -614,11 +610,6 @@ func logActionableError(ctx context.Context, logger *slog.Logger, st *status.Sta
 		if count, e := strconv.Atoi(resendCountStr); e == nil {
 			baseLogAttrs = append(baseLogAttrs, slog.Int64("gcp.grpc.resend_count", int64(count)))
 		}
-	}
-
-	if method, ok := ctx.Value(rpcMethodKey{}).(string); ok {
-		// TODO: remove the current implementation of rpc.method parsing when we can
-		baseLogAttrs = append(baseLogAttrs, slog.String("rpc.method", strings.TrimPrefix(method, "/")))
 	}
 
 	msg := st.Message()
