@@ -35,6 +35,7 @@ import (
 
 	"github.com/googleapis/gax-go/v2/callctx"
 	oteltrace "go.opentelemetry.io/otel/trace"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/stats"
@@ -635,11 +636,22 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 	}
 
 	st := status.New(grpccodes.Unavailable, "network timeout")
+	ei := &errdetails.ErrorInfo{
+		Reason: "RATE_LIMIT_EXCEEDED",
+		Domain: "googleapis.com",
+		Metadata: map[string]string{
+			"quota_limit": "100",
+		},
+	}
+	st, _ = st.WithDetails(ei)
 	rs := &stats.End{Error: st.Err()}
 
 	h.HandleRPC(ctx, rs)
 
 	logOutput := logBuf.String()
+	if strings.Count(logOutput, "\n") > 1 && logOutput != "" {
+		t.Errorf("Expected exactly 1 log record, got multiple: %s", logOutput)
+	}
 	if !strings.Contains(logOutput, `"error.type":"UNAVAILABLE"`) {
 		t.Errorf("Expected log to contain error.type, got: %s", logOutput)
 	}
@@ -654,6 +666,15 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 	}
 	if !strings.Contains(logOutput, `"gcp.client.version":"1.2.3"`) {
 		t.Errorf("Expected log to contain gcp.client.version, got: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, `"error.reason":"RATE_LIMIT_EXCEEDED"`) {
+		t.Errorf("Expected log to contain error.reason, got: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, `"error.domain":"googleapis.com"`) {
+		t.Errorf("Expected log to contain error.domain, got: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, `"error.metadata.quota_limit":"100"`) {
+		t.Errorf("Expected log to contain error.metadata.quota_limit, got: %s", logOutput)
 	}
 }
 

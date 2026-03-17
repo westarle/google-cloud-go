@@ -580,23 +580,17 @@ func (h *otelHandler) HandleRPC(ctx context.Context, s stats.RPCStats) {
 			}
 
 			details := st.Details()
-			if len(details) == 0 {
-				logger.LogAttrs(ctx, slog.LevelInfo, msg, baseLogAttrs...)
-			} else {
-				for _, d := range details {
-					detailAttrs := make([]slog.Attr, len(baseLogAttrs))
-					copy(detailAttrs, baseLogAttrs)
-
-					if ei, ok := d.(*errdetails.ErrorInfo); ok {
-						detailAttrs = append(detailAttrs, slog.String("error.domain", ei.GetDomain()))
-						detailAttrs = append(detailAttrs, slog.String("error.reason", ei.GetReason()))
-						for k, v := range ei.GetMetadata() {
-							detailAttrs = append(detailAttrs, slog.String("error.metadata."+k, v))
-						}
+			for _, d := range details {
+				if ei, ok := d.(*errdetails.ErrorInfo); ok {
+					baseLogAttrs = append(baseLogAttrs, slog.String("error.domain", ei.GetDomain()))
+					baseLogAttrs = append(baseLogAttrs, slog.String("error.reason", ei.GetReason()))
+					for k, v := range ei.GetMetadata() {
+						baseLogAttrs = append(baseLogAttrs, slog.String("error.metadata."+k, v))
 					}
-					logger.LogAttrs(ctx, slog.LevelInfo, msg, detailAttrs...)
+					break
 				}
 			}
+			logger.LogAttrs(ctx, slog.LevelInfo, msg, baseLogAttrs...)
 		}
 
 		if span.IsRecording() {
