@@ -621,11 +621,6 @@ func logActionableError(ctx context.Context, logger *slog.Logger, st *status.Sta
 		}
 	}
 
-	if !isStatusOk || st.Code() == codes.Unknown || st.Code() == codes.Internal || errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(ctx.Err(), context.Canceled) {
-		baseLogAttrs = append(baseLogAttrs, slog.String("exception.type", fmt.Sprintf("%T", err)))
-		baseLogAttrs = append(baseLogAttrs, slog.String("exception.message", err.Error()))
-	}
-
 	details := st.Details()
 	for _, d := range details {
 		if ei, ok := d.(*errdetails.ErrorInfo); ok {

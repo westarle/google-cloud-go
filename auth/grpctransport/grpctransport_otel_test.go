@@ -684,12 +684,6 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 	if !strings.Contains(logOutput, `"error.type":"CLIENT_TIMEOUT"`) {
 		t.Errorf("Expected log to contain CLIENT_TIMEOUT, got: %s", logOutput)
 	}
-	if !strings.Contains(logOutput, `"exception.type":"context.deadlineExceededError"`) {
-		t.Errorf("Expected log to contain exception.type for context error, got: %s", logOutput)
-	}
-	if !strings.Contains(logOutput, `"exception.message":"context deadline exceeded"`) {
-		t.Errorf("Expected log to contain exception.message for context error, got: %s", logOutput)
-	}
 }
 
 type mockStatsHandler struct{}
