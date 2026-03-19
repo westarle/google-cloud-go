@@ -28,7 +28,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
-	"golang.org/x/oauth2"
 	"google.golang.org/api/option"
 )
 
@@ -210,7 +209,7 @@ func TestTracingTelemetryAttributes(t *testing.T) {
 			defer ts.Close()
 
 			ctx := context.Background()
-			client, err := NewClient(ctx, "test-project", option.WithEndpoint(ts.URL), option.WithTokenSource(oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "dummy-token"})))
+			client, err := NewClient(ctx, "test-project", option.WithEndpoint(ts.URL), option.WithoutAuthentication())
 			if err != nil {
 				t.Fatalf("failed to create client: %v", err)
 			}
