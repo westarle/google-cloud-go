@@ -22,11 +22,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/googleapis/gax-go/v2"
 	"github.com/googleapis/gax-go/v2/callctx"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"golang.org/x/oauth2"
 	"google.golang.org/api/option"
 )
 
@@ -34,6 +36,8 @@ func TestSetDatasetTraceMetadata(t *testing.T) {
 	// Enable tracing feature for the test
 	os.Setenv("GOOGLE_SDK_GO_EXPERIMENTAL_TRACING", "true")
 	defer os.Unsetenv("GOOGLE_SDK_GO_EXPERIMENTAL_TRACING")
+	gax.TestOnlyResetIsFeatureEnabled()
+	defer gax.TestOnlyResetIsFeatureEnabled()
 
 	ctx := context.Background()
 	projectID := "test-project"
@@ -57,6 +61,8 @@ func TestSetDatasetTraceMetadata(t *testing.T) {
 func TestTracingTelemetryAttributes(t *testing.T) {
 	os.Setenv("GOOGLE_SDK_GO_EXPERIMENTAL_TRACING", "true")
 	defer os.Unsetenv("GOOGLE_SDK_GO_EXPERIMENTAL_TRACING")
+	gax.TestOnlyResetIsFeatureEnabled()
+	defer gax.TestOnlyResetIsFeatureEnabled()
 
 	tests := []struct {
 		name             string
@@ -204,7 +210,7 @@ func TestTracingTelemetryAttributes(t *testing.T) {
 			defer ts.Close()
 
 			ctx := context.Background()
-			client, err := NewClient(ctx, "test-project", option.WithEndpoint(ts.URL), option.WithoutAuthentication())
+			client, err := NewClient(ctx, "test-project", option.WithEndpoint(ts.URL), option.WithTokenSource(oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "dummy-token"})))
 			if err != nil {
 				t.Fatalf("failed to create client: %v", err)
 			}
