@@ -18,11 +18,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
-	"github.com/googleapis/gax-go/v2"
 	"github.com/googleapis/gax-go/v2/callctx"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -32,11 +30,6 @@ import (
 )
 
 func TestSetDatasetTraceMetadata(t *testing.T) {
-	// Enable tracing feature for the test
-	os.Setenv("GOOGLE_SDK_GO_EXPERIMENTAL_TRACING", "true")
-	defer os.Unsetenv("GOOGLE_SDK_GO_EXPERIMENTAL_TRACING")
-	gax.TestOnlyResetIsFeatureEnabled()
-	defer gax.TestOnlyResetIsFeatureEnabled()
 
 	ctx := context.Background()
 	projectID := "test-project"
@@ -58,11 +51,6 @@ func TestSetDatasetTraceMetadata(t *testing.T) {
 }
 
 func TestTracingTelemetryAttributes(t *testing.T) {
-	t.Skip("Skipping flaky test: https://github.com/googleapis/google-cloud-go/issues/14205")
-	os.Setenv("GOOGLE_SDK_GO_EXPERIMENTAL_TRACING", "true")
-	defer os.Unsetenv("GOOGLE_SDK_GO_EXPERIMENTAL_TRACING")
-	gax.TestOnlyResetIsFeatureEnabled()
-	defer gax.TestOnlyResetIsFeatureEnabled()
 
 	tests := []struct {
 		name             string

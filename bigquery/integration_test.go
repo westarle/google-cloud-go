@@ -78,6 +78,10 @@ var (
 // modifies the client.
 
 func TestMain(m *testing.M) {
+	// Enable tracing globally for all tests in this package to avoid data races
+	// caused by gax.TestOnlyResetIsFeatureEnabled().
+	os.Setenv("GOOGLE_SDK_GO_EXPERIMENTAL_TRACING", "true")
+
 	cleanup := initIntegrationTest()
 	r := m.Run()
 	cleanup()
