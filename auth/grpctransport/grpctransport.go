@@ -497,8 +497,15 @@ type otelHandler struct {
 // the current span.
 func (h *otelHandler) TagRPC(ctx context.Context, info *stats.RPCTagInfo) context.Context {
 	ctx = h.Handler.TagRPC(ctx, info)
-	span := trace.SpanFromContext(ctx)
-	if !span.IsRecording() {
+
+	var span trace.Span
+	if gax.IsFeatureEnabled("TRACING") {
+		if s := trace.SpanFromContext(ctx); s != nil && s.IsRecording() {
+			span = s
+		}
+	}
+
+	if span == nil {
 		return ctx
 	}
 	var attrs []attribute.KeyValue
@@ -525,7 +532,12 @@ func (h *otelHandler) HandleRPC(ctx context.Context, s stats.RPCStats) {
 		return
 	}
 
-	span := trace.SpanFromContext(ctx)
+	var span trace.Span
+	if gax.IsFeatureEnabled("TRACING") {
+		if s := trace.SpanFromContext(ctx); s != nil && s.IsRecording() {
+			span = s
+		}
+	}
 
 	var logger *slog.Logger
 	if gax.IsFeatureEnabled("LOGGING") {
@@ -534,7 +546,7 @@ func (h *otelHandler) HandleRPC(ctx context.Context, s stats.RPCStats) {
 		}
 	}
 
-	if !span.IsRecording() && logger == nil {
+	if span == nil && logger == nil {
 		h.Handler.HandleRPC(ctx, s)
 		return
 	}
@@ -587,7 +599,7 @@ func (h *otelHandler) handleRPCError(ctx context.Context, span trace.Span, logge
 		logActionableError(ctx, logger, st, errorType, rpcStatusCode, h.staticAttrs, end.Error, apiErr, ok)
 	}
 
-	if span.IsRecording() {
+	if span != nil {
 		attrs := []attribute.KeyValue{
 			attribute.String("error.type", errorType),
 			attribute.String("status.message", st.Message()),
@@ -599,7 +611,7 @@ func (h *otelHandler) handleRPCError(ctx context.Context, span trace.Span, logge
 }
 
 func (h *otelHandler) handleRPCSuccess(span trace.Span) {
-	if span.IsRecording() {
+	if span != nil {
 		attrs := []attribute.KeyValue{
 			attribute.String("rpc.response.status_code", "OK"),
 		}
@@ -631,7 +643,22 @@ func logActionableError(ctx context.Context, logger *slog.Logger, st *status.Sta
 		msg = "API call failed"
 	}
 
-	transport.LogActionableError(ctx, logger, errorType, msg, baseLogAttrs, apiErr)
+	if resName, ok := callctx.TelemetryFromContext(ctx, "resource_name"); ok {
+		baseLogAttrs = append(baseLogAttrs, slog.String("gcp.resource.destination.id", resName))
+	}
+
+	if apiErr != nil {
+		if domain := apiErr.Domain(); domain != "" {
+			baseLogAttrs = append(baseLogAttrs, slog.String("gcp.errors.domain", domain))
+		}
+		for k, v := range apiErr.Metadata() {
+			baseLogAttrs = append(baseLogAttrs, slog.String("gcp.errors.metadata."+k, v))
+		}
+	}
+
+	baseLogAttrs = append(baseLogAttrs, slog.String("error.type", errorType))
+
+	logger.LogAttrs(ctx, slog.LevelDebug, msg, baseLogAttrs...)
 }
 
 // codeToCanonicalStr returns the canonical name for each of the 17 gRPC

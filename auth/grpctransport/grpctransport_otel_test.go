@@ -700,6 +700,11 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 		{
 			name: "APIError Wrapped",
 			err:  func() error { err, _ := apierror.FromError(stWithReason.Err()); return err }(),
+			setupCtx: func(ctx context.Context) (context.Context, context.CancelFunc) {
+				ctx = callctx.WithTelemetryContext(ctx, "resend_count", "3")
+				ctx = callctx.WithTelemetryContext(ctx, "resource_name", "my-resource")
+				return ctx, nil
+			},
 			want: map[string]any{
 				"level":                           "DEBUG",
 				"msg":                             "network timeout",
@@ -708,6 +713,8 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 				"error.type":                      "RATE_LIMIT_EXCEEDED",
 				"gcp.errors.domain":               "googleapis.com",
 				"gcp.errors.metadata.quota_limit": "100",
+				"gcp.grpc.resend_count":           float64(3),
+				"gcp.resource.destination.id":     "my-resource",
 				"gcp.client.version":              "1.2.3",
 			},
 		},
@@ -765,10 +772,23 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 				"gcp.client.version":       "1.2.3",
 			},
 		},
+		{
+			name: "Fast Exit No Logging No Tracing",
+			err:  errors.New("should not log"),
+			setupCtx: func(ctx context.Context) (context.Context, context.CancelFunc) {
+				t.Setenv("GOOGLE_SDK_GO_EXPERIMENTAL_LOGGING", "false")
+				gax.TestOnlyResetIsFeatureEnabled()
+				return ctx, nil
+			},
+			want: nil,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("GOOGLE_SDK_GO_EXPERIMENTAL_LOGGING", "true")
+			gax.TestOnlyResetIsFeatureEnabled()
+
 			var logBuf bytes.Buffer
 			logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 			ctx := callctx.WithLoggerContext(context.Background(), logger)
@@ -789,12 +809,20 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 			h := &otelHandler{
 				Handler:     &mockStatsHandler{},
 				staticAttrs: staticLogAttrs,
-				logger:      logger,
+				logger:      logger, // Notice: logger is passed here, but if LOGGING is false, HandleRPC sets internal logger=nil.
 			}
 
 			h.HandleRPC(ctx, &stats.End{Error: tt.err})
 
 			logOutput := logBuf.String()
+
+			if tt.want == nil {
+				if strings.TrimSpace(logOutput) != "" {
+					t.Fatalf("Expected no log output, got: %s", logOutput)
+				}
+				return
+			}
+
 			if strings.Count(strings.TrimSpace(logOutput), "\n") > 0 {
 				t.Fatalf("Expected exactly 1 log record, got multiple: %s", logOutput)
 			}
@@ -816,78 +844,114 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 	}
 }
 
-func TestHandleRPC_TracingAndLogging(t *testing.T) {
-	gax.TestOnlyResetIsFeatureEnabled()
-	defer gax.TestOnlyResetIsFeatureEnabled()
+func TestDial_TracingAndLogging_Combinations(t *testing.T) {
+	// Ensure any lingering HTTP/2 connections are closed to avoid goroutine leaks.
+	defer http.DefaultTransport.(*http.Transport).CloseIdleConnections()
+
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	defer tp.Shutdown(context.Background())
+
+	// Restore the global tracer provider after the test to avoid side effects.
+	defer func(prev oteltrace.TracerProvider) { otel.SetTracerProvider(prev) }(otel.GetTracerProvider())
+	otel.SetTracerProvider(tp)
+
+	errorEchoer := &fakeEchoService{
+		Fn: func(ctx context.Context, req *echo.EchoRequest) (*echo.EchoReply, error) {
+			return nil, status.Error(grpccodes.Internal, "test error")
+		},
+	}
 
 	tests := []struct {
-		name       string
-		logging    bool
-		recording  bool
-		setupCtx   func(context.Context) context.Context
-		wantLog    bool
-		wantResend int64
+		name             string
+		logging          bool
+		tracing          bool
+		wantLog          bool
+		wantTracingAttrs bool
 	}{
 		{
-			name:      "both disabled",
-			logging:   false,
-			recording: false,
-			wantLog:   false,
+			name:             "both disabled",
+			logging:          false,
+			tracing:          false,
+			wantLog:          false,
+			wantTracingAttrs: false,
 		},
 		{
-			name:      "tracing enabled, logging disabled",
-			logging:   false,
-			recording: true,
-			wantLog:   false,
+			name:             "tracing enabled, logging disabled",
+			logging:          false,
+			tracing:          true,
+			wantLog:          false,
+			wantTracingAttrs: true,
 		},
 		{
-			name:      "tracing disabled, logging enabled with resend_count",
-			logging:   true,
-			recording: false,
-			setupCtx: func(ctx context.Context) context.Context {
-				return callctx.WithTelemetryContext(ctx, "resend_count", "3")
-			},
-			wantLog:    true,
-			wantResend: 3,
+			name:             "tracing disabled, logging enabled",
+			logging:          true,
+			tracing:          false,
+			wantLog:          true,
+			wantTracingAttrs: true,
 		},
 		{
-			name:      "both enabled",
-			logging:   true,
-			recording: true,
-			wantLog:   true,
+			name:             "both enabled",
+			logging:          true,
+			tracing:          true,
+			wantLog:          true,
+			wantTracingAttrs: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			exporter.Reset()
+			gax.TestOnlyResetIsFeatureEnabled()
+			defer gax.TestOnlyResetIsFeatureEnabled()
+
 			if tt.logging {
 				t.Setenv("GOOGLE_SDK_GO_EXPERIMENTAL_LOGGING", "true")
 			} else {
 				t.Setenv("GOOGLE_SDK_GO_EXPERIMENTAL_LOGGING", "false")
 			}
-			gax.TestOnlyResetIsFeatureEnabled()
+			if tt.tracing {
+				t.Setenv("GOOGLE_SDK_GO_EXPERIMENTAL_TRACING", "true")
+			} else {
+				t.Setenv("GOOGLE_SDK_GO_EXPERIMENTAL_TRACING", "false")
+			}
+
+			l, err := net.Listen("tcp", "localhost:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			gsrv := grpc.NewServer()
+			echo.RegisterEchoerServer(gsrv, errorEchoer)
+			go func() {
+				if err := gsrv.Serve(l); err != nil {
+					panic(err)
+				}
+			}()
+			defer gsrv.Stop()
 
 			var logBuf bytes.Buffer
 			logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-			ctx := callctx.WithLoggerContext(context.Background(), logger)
 
-			if tt.setupCtx != nil {
-				ctx = tt.setupCtx(ctx)
+			opts := &Options{
+				Endpoint:              l.Addr().String(),
+				DisableAuthentication: true,
+				Logger:                logger,
+				InternalOptions: &InternalOptions{
+					TelemetryAttributes: map[string]string{
+						"gcp.client.version": "1.2.3",
+					},
+				},
+				GRPCDialOpts: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 			}
 
-			h := &otelHandler{
-				Handler: &mockStatsHandler{},
-				logger:  logger,
+			pool, err := Dial(context.Background(), false, opts)
+			if err != nil {
+				t.Fatalf("Dial() = %v, want nil", err)
 			}
+			defer pool.Close()
 
-			span := oteltrace.SpanFromContext(ctx)
-			if tt.recording {
-				_, span = otel.Tracer("test").Start(ctx, "test-span")
-				defer span.End()
-			}
-			ctx = oteltrace.ContextWithSpan(ctx, span)
-
-			h.HandleRPC(ctx, &stats.End{Error: errors.New("test error")})
+			client := echo.NewEchoerClient(pool)
+			_, _ = client.Echo(context.Background(), &echo.EchoRequest{Message: "hello"})
 
 			logOutput := logBuf.String()
 			hasLog := strings.TrimSpace(logOutput) != ""
@@ -896,14 +960,21 @@ func TestHandleRPC_TracingAndLogging(t *testing.T) {
 				t.Errorf("got log: %v, want: %v\noutput: %s", hasLog, tt.wantLog, logOutput)
 			}
 
-			if tt.wantLog && tt.wantResend > 0 {
-				var got map[string]any
-				if err := json.Unmarshal(logBuf.Bytes(), &got); err != nil {
-					t.Fatalf("failed to unmarshal log JSON: %v", err)
+			spans := exporter.GetSpans()
+			if len(spans) != 1 {
+				t.Fatalf("len(spans) = %d, want 1", len(spans))
+			}
+
+			hasTracingAttrs := false
+			for _, attr := range spans[0].Attributes {
+				if attr.Key == "gcp.client.version" && attr.Value.AsString() == "1.2.3" {
+					hasTracingAttrs = true
+					break
 				}
-				if int64(got["gcp.grpc.resend_count"].(float64)) != tt.wantResend {
-					t.Errorf("got resend count: %v, want: %v", got["gcp.grpc.resend_count"], tt.wantResend)
-				}
+			}
+
+			if hasTracingAttrs != tt.wantTracingAttrs {
+				t.Errorf("got tracing attrs: %v, want: %v", hasTracingAttrs, tt.wantTracingAttrs)
 			}
 		})
 	}
