@@ -30,6 +30,7 @@ import (
 	"cloud.google.com/go/internal/trace"
 	"cloud.google.com/go/internal/version"
 	gax "github.com/googleapis/gax-go/v2"
+	"github.com/googleapis/gax-go/v2/callctx"
 	bq "google.golang.org/api/bigquery/v2"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
@@ -169,9 +170,9 @@ func (c *Client) insertJob(ctx context.Context, job *bq.Job, media io.Reader, me
 	}
 	var res *bq.Job
 	var err error
-	invoke := func() error {
+	invoke := func(ctx context.Context) error {
 		sCtx := trace.StartSpan(ctx, "bigquery.jobs.insert")
-		res, err = call.Do()
+		res, err = call.Context(ctx).Do()
 		trace.EndSpan(sCtx, err)
 		return err
 	}
@@ -184,7 +185,7 @@ func (c *Client) insertJob(ctx context.Context, job *bq.Job, media io.Reader, me
 		// We deviate from default retries due to BigQuery wanting to retry structured internal job errors.
 		err = runWithRetryExplicit(ctx, invoke, jobRetryReasons)
 	} else {
-		err = invoke()
+		err = invoke(ctx)
 	}
 	if err != nil {
 		return nil, err
@@ -202,9 +203,9 @@ func (c *Client) runQuery(ctx context.Context, queryRequest *bq.QueryRequest) (*
 
 	var res *bq.QueryResponse
 	var err error
-	invoke := func() error {
+	invoke := func(ctx context.Context) error {
 		sCtx := trace.StartSpan(ctx, "bigquery.jobs.query")
-		res, err = call.Do()
+		res, err = call.Context(ctx).Do()
 		trace.EndSpan(sCtx, err)
 		return err
 	}
@@ -231,19 +232,25 @@ func unixMillisToTime(m int64) time.Time {
 // the context is done.
 // See the similar function in ../storage/invoke.go. The main difference is the
 // reason for retrying.
-func runWithRetry(ctx context.Context, call func() error) error {
+func runWithRetry(ctx context.Context, call func(ctx context.Context) error) error {
 	return runWithRetryExplicit(ctx, call, defaultRetryReasons)
 }
 
-func runWithRetryExplicit(ctx context.Context, call func() error, allowedReasons []string) error {
+func runWithRetryExplicit(ctx context.Context, call func(ctx context.Context) error, allowedReasons []string) error {
 	// These parameters match the suggestions in https://cloud.google.com/bigquery/sla.
 	backoff := gax.Backoff{
 		Initial:    1 * time.Second,
 		Max:        32 * time.Second,
 		Multiplier: 2,
 	}
+	attempts := 0
 	return cloudinternal.Retry(ctx, backoff, func() (stop bool, err error) {
-		err = call()
+		attemptCtx := ctx
+		if attempts > 0 {
+			attemptCtx = callctx.WithTelemetryContext(ctx, "resend_count", fmt.Sprintf("%d", attempts))
+		}
+		attempts++
+		err = call(attemptCtx)
 		if err == nil {
 			return true, nil
 		}

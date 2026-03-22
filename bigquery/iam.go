@@ -62,8 +62,8 @@ func (c *bqIAMClient) GetWithVersion(ctx context.Context, resource string, reque
 	setClientHeader(call.Header())
 
 	var bqp *bq.Policy
-	err = runWithRetry(ctx, func() error {
-		bqp, err = call.Do()
+	err = runWithRetry(ctx, func(ctx context.Context) error {
+		bqp, err = call.Context(ctx).Do()
 		return err
 	})
 	if err != nil {
@@ -79,8 +79,8 @@ func (c *bqIAMClient) Set(ctx context.Context, resource string, p *iampb.Policy)
 	bqp := iamToBigQueryPolicy(p)
 	call := c.bqs.Tables.SetIamPolicy(resource, &bq.SetIamPolicyRequest{Policy: bqp}).Context(ctx)
 	setClientHeader(call.Header())
-	return runWithRetry(ctx, func() error {
-		_, err := call.Do()
+	return runWithRetry(ctx, func(ctx context.Context) error {
+		_, err := call.Context(ctx).Do()
 		return err
 	})
 }
@@ -93,8 +93,8 @@ func (c *bqIAMClient) Test(ctx context.Context, resource string, perms []string)
 	setClientHeader(call.Header())
 
 	var res *bq.TestIamPermissionsResponse
-	err = runWithRetry(ctx, func() error {
-		res, err = call.Do()
+	err = runWithRetry(ctx, func(ctx context.Context) error {
+		res, err = call.Context(ctx).Do()
 		return err
 	})
 	if err != nil {

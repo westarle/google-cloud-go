@@ -84,7 +84,7 @@ func (r *Routine) Create(ctx context.Context, rm *RoutineMetadata) (err error) {
 	ctx = setDatasetItemTraceMetadata(ctx, r.ProjectID, r.DatasetID, "routines")
 	req := r.c.bqs.Routines.Insert(r.ProjectID, r.DatasetID, routine).Context(ctx)
 	setClientHeader(req.Header())
-	_, err = req.Do()
+	_, err = req.Context(ctx).Do()
 	return err
 }
 
@@ -97,9 +97,9 @@ func (r *Routine) Metadata(ctx context.Context) (rm *RoutineMetadata, err error)
 	req := r.c.bqs.Routines.Get(r.ProjectID, r.DatasetID, r.RoutineID).Context(ctx)
 	setClientHeader(req.Header())
 	var routine *bq.Routine
-	err = runWithRetry(ctx, func() (err error) {
+	err = runWithRetry(ctx, func(ctx context.Context) (err error) {
 		sCtx := trace.StartSpan(ctx, "bigquery.routines.get")
-		routine, err = req.Do()
+		routine, err = req.Context(ctx).Do()
 		trace.EndSpan(sCtx, err)
 		return err
 	})
@@ -132,9 +132,9 @@ func (r *Routine) Update(ctx context.Context, upd *RoutineMetadataToUpdate, etag
 		call.Header().Set("If-Match", etag)
 	}
 	var res *bq.Routine
-	if err := runWithRetry(ctx, func() (err error) {
+	if err := runWithRetry(ctx, func(ctx context.Context) (err error) {
 		sCtx := trace.StartSpan(ctx, "bigquery.routines.update")
-		res, err = call.Do()
+		res, err = call.Context(ctx).Do()
 		trace.EndSpan(sCtx, err)
 		return err
 	}); err != nil {
@@ -151,7 +151,7 @@ func (r *Routine) Delete(ctx context.Context) (err error) {
 	ctx = setRoutineTraceMetadata(ctx, r.ProjectID, r.DatasetID, r.RoutineID)
 	req := r.c.bqs.Routines.Delete(r.ProjectID, r.DatasetID, r.RoutineID).Context(ctx)
 	setClientHeader(req.Header())
-	return req.Do()
+	return req.Context(ctx).Do()
 }
 
 // RoutineDeterminism specifies the level of determinism that javascript User Defined Functions

@@ -245,9 +245,9 @@ func (j *Job) Cancel(ctx context.Context) error {
 		Fields(). // We don't need any of the response data.
 		Context(ctx)
 	setClientHeader(call.Header())
-	return runWithRetry(ctx, func() error {
+	return runWithRetry(ctx, func(ctx context.Context) error {
 		sCtx := trace.StartSpan(ctx, "bigquery.jobs.cancel")
-		_, err := call.Do()
+		_, err := call.Context(ctx).Do()
 		trace.EndSpan(sCtx, err)
 		return err
 	})
@@ -265,9 +265,9 @@ func (j *Job) Delete(ctx context.Context) (err error) {
 	}
 	setClientHeader(call.Header())
 
-	return runWithRetry(ctx, func() (err error) {
+	return runWithRetry(ctx, func(ctx context.Context) (err error) {
 		sCtx := trace.StartSpan(ctx, "bigquery.jobs.delete")
-		err = call.Do()
+		err = call.Context(ctx).Do()
 		trace.EndSpan(sCtx, err)
 		return err
 	})
@@ -366,7 +366,7 @@ func (j *Job) waitForQuery(ctx context.Context, projectID string) (Schema, uint6
 	var res *bq.GetQueryResultsResponse
 	err := internal.Retry(ctx, backoff, func() (stop bool, err error) {
 		sCtx := trace.StartSpan(ctx, "bigquery.jobs.getQueryResults")
-		res, err = call.Do()
+		res, err = call.Context(ctx).Do()
 		trace.EndSpan(sCtx, err)
 		if err != nil {
 			return !retryableError(err, jobRetryReasons), err
@@ -1129,9 +1129,9 @@ func (it *JobIterator) fetch(pageSize int, pageToken string) (string, error) {
 		req.ParentJobId(it.ParentJobID)
 	}
 	var res *bq.JobList
-	err := runWithRetry(it.ctx, func() (err error) {
+	err := runWithRetry(it.ctx, func(ctx context.Context) (err error) {
 		sCtx := trace.StartSpan(it.ctx, "bigquery.jobs.list")
-		res, err = req.Do()
+		res, err = req.Context(ctx).Do()
 		trace.EndSpan(sCtx, err)
 		return err
 	})
@@ -1168,9 +1168,9 @@ func (c *Client) getJobInternal(ctx context.Context, jobID, location, projectID 
 		call = call.Fields(fields...)
 	}
 	setClientHeader(call.Header())
-	err := runWithRetry(ctx, func() (err error) {
+	err := runWithRetry(ctx, func(ctx context.Context) (err error) {
 		sCtx := trace.StartSpan(ctx, "bigquery.jobs.get")
-		job, err = call.Do()
+		job, err = call.Context(ctx).Do()
 		trace.EndSpan(sCtx, err)
 		return err
 	})

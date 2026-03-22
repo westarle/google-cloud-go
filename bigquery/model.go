@@ -86,9 +86,9 @@ func (m *Model) Metadata(ctx context.Context) (mm *ModelMetadata, err error) {
 	req := m.c.bqs.Models.Get(m.ProjectID, m.DatasetID, m.ModelID).Context(ctx)
 	setClientHeader(req.Header())
 	var model *bq.Model
-	err = runWithRetry(ctx, func() (err error) {
+	err = runWithRetry(ctx, func(ctx context.Context) (err error) {
 		sCtx := trace.StartSpan(ctx, "bigquery.models.get")
-		model, err = req.Do()
+		model, err = req.Context(ctx).Do()
 		trace.EndSpan(sCtx, err)
 		return err
 	})
@@ -114,9 +114,9 @@ func (m *Model) Update(ctx context.Context, mm ModelMetadataToUpdate, etag strin
 		call.Header().Set("If-Match", etag)
 	}
 	var res *bq.Model
-	if err := runWithRetry(ctx, func() (err error) {
+	if err := runWithRetry(ctx, func(ctx context.Context) (err error) {
 		sCtx := trace.StartSpan(ctx, "bigquery.models.patch")
-		res, err = call.Do()
+		res, err = call.Context(ctx).Do()
 		trace.EndSpan(sCtx, err)
 		return err
 	}); err != nil {
@@ -133,7 +133,7 @@ func (m *Model) Delete(ctx context.Context) (err error) {
 	ctx = setModelTraceMetadata(ctx, m.ProjectID, m.DatasetID, m.ModelID)
 	req := m.c.bqs.Models.Delete(m.ProjectID, m.DatasetID, m.ModelID).Context(ctx)
 	setClientHeader(req.Header())
-	return req.Do()
+	return req.Context(ctx).Do()
 }
 
 // ModelMetadata represents information about a BigQuery ML model.

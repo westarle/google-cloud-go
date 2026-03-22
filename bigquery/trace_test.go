@@ -16,6 +16,7 @@ package bigquery
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -457,7 +458,7 @@ func TestTracingTelemetryAttributes(t *testing.T) {
 						"gcp.client.service":          "bigquery.googleapis.com",
 						"gcp.client.version":          internal.Version,
 						"http.request.method":         tt.wantMethod,
-						"http.response.status_code":   "",
+						"http.response.status_code":   "200",
 						"network.protocol.version":    "1.1",
 						"rpc.system.name":             "http",
 						"url.domain":                  "bigquery.googleapis.com",
@@ -465,12 +466,18 @@ func TestTracingTelemetryAttributes(t *testing.T) {
 
 					actualAttributes := make(map[attribute.Key]string, len(span.Attributes))
 					for _, attr := range span.Attributes {
-						actualAttributes[attr.Key] = attr.Value.AsString()
+						actualAttributes[attr.Key] = fmt.Sprint(attr.Value.AsInterface())
 					}
 
-					if tt.name == "Retry_Dataset_Metadata" && actualAttributes["error.type"] == "503" {
-						expectedAttributes["error.type"] = "503"
-						expectedAttributes["status.message"] = "503 Service Unavailable"
+					if tt.name == "Retry_Dataset_Metadata" {
+						if actualAttributes["error.type"] == "503" {
+							expectedAttributes["error.type"] = "503"
+							expectedAttributes["status.message"] = "503 Service Unavailable"
+							expectedAttributes["http.response.status_code"] = "503"
+						} else {
+							// Second attempt should have resend_count
+							expectedAttributes["http.request.resend_count"] = "1"
+						}
 					}
 
 					// Verify dynamic fields and then delete them so cmp.Diff doesn't fail
