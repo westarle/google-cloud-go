@@ -642,6 +642,13 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 	}
 	stDifferentReason, _ = stDifferentReason.WithDetails(eiDiff)
 
+	stMatchingMsgReason := status.New(grpccodes.PermissionDenied, "IAM_PERMISSION_DENIED: User does not have permission")
+	eiMatching := &errdetails.ErrorInfo{
+		Reason: "IAM_PERMISSION_DENIED",
+		Domain: "iam.googleapis.com",
+	}
+	stMatchingMsgReason, _ = stMatchingMsgReason.WithDetails(eiMatching)
+
 	stEmptyMsg := status.New(grpccodes.Internal, "")
 
 	tests := []struct {
@@ -670,6 +677,19 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 			want: map[string]any{
 				"level":                    "DEBUG",
 				"msg":                      "not allowed",
+				"rpc.system.name":          "grpc",
+				"rpc.response.status_code": "PERMISSION_DENIED",
+				"error.type":               "IAM_PERMISSION_DENIED",
+				"gcp.errors.domain":        "iam.googleapis.com",
+				"gcp.client.version":       "1.2.3",
+			},
+		},
+		{
+			name: "Matching Message and Reason",
+			err:  stMatchingMsgReason.Err(),
+			want: map[string]any{
+				"level":                    "DEBUG",
+				"msg":                      "IAM_PERMISSION_DENIED: User does not have permission",
 				"rpc.system.name":          "grpc",
 				"rpc.response.status_code": "PERMISSION_DENIED",
 				"error.type":               "IAM_PERMISSION_DENIED",
