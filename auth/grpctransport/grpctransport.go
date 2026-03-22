@@ -620,13 +620,18 @@ func logActionableError(ctx context.Context, logger *slog.Logger, st *status.Sta
 		}
 	}
 
-	msg := st.Message()
+	var msg string
+	if apiErr != nil && apiErr.GRPCStatus() != nil {
+		msg = apiErr.GRPCStatus().Message()
+	}
+	if msg == "" && st != nil {
+		msg = st.Message()
+	}
+	if msg == "" && err != nil && !isStatusOk {
+		msg = err.Error()
+	}
 	if msg == "" {
-		if err != nil && !isStatusOk {
-			msg = err.Error()
-		} else {
-			msg = "API call failed"
-		}
+		msg = "API call failed"
 	}
 
 	transport.LogActionableError(ctx, logger, errorType, msg, baseLogAttrs, apiErr)

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -28,6 +29,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/googleapis/gax-go/v2"
+	"github.com/googleapis/gax-go/v2/apierror"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -623,21 +625,7 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 	defer gax.TestOnlyResetIsFeatureEnabled()
 	t.Setenv("GOOGLE_SDK_GO_EXPERIMENTAL_LOGGING", "true")
 
-	var logBuf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	ctx := callctx.WithLoggerContext(context.Background(), logger)
-
-	staticLogAttrs := []slog.Attr{
-		slog.String("gcp.client.version", "1.2.3"),
-	}
-
-	h := &otelHandler{
-		Handler:     &mockStatsHandler{},
-		staticAttrs: staticLogAttrs,
-		logger:      logger,
-	}
-
-	st := status.New(grpccodes.Unavailable, "network timeout")
+	stWithReason := status.New(grpccodes.Unavailable, "network timeout")
 	ei := &errdetails.ErrorInfo{
 		Reason: "RATE_LIMIT_EXCEEDED",
 		Domain: "googleapis.com",
@@ -645,64 +633,146 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 			"quota_limit": "100",
 		},
 	}
-	st, _ = st.WithDetails(ei)
-	rs := &stats.End{Error: st.Err()}
+	stWithReason, _ = stWithReason.WithDetails(ei)
 
-	h.HandleRPC(ctx, rs)
+	stEmptyMsg := status.New(grpccodes.Internal, "")
 
-	logOutput := logBuf.String()
-	if strings.Count(strings.TrimSpace(logOutput), "\n") > 0 {
-		t.Errorf("Expected exactly 1 log record, got multiple: %s", logOutput)
+	tests := []struct {
+		name     string
+		err      error
+		setupCtx func(context.Context) (context.Context, context.CancelFunc)
+		want     map[string]any
+	}{
+		{
+			name: "ErrorInfo Actionable Error",
+			err:  stWithReason.Err(),
+			want: map[string]any{
+				"level":                           "DEBUG",
+				"msg":                             "network timeout",
+				"rpc.system.name":                 "grpc",
+				"rpc.response.status_code":        "UNAVAILABLE",
+				"error.type":                      "RATE_LIMIT_EXCEEDED",
+				"gcp.errors.domain":               "googleapis.com",
+				"gcp.errors.metadata.quota_limit": "100",
+				"gcp.client.version":              "1.2.3",
+			},
+		},
+		{
+			name: "APIError Wrapped",
+			err:  func() error { err, _ := apierror.FromError(stWithReason.Err()); return err }(),
+			want: map[string]any{
+				"level":                           "DEBUG",
+				"msg":                             "network timeout",
+				"rpc.system.name":                 "grpc",
+				"rpc.response.status_code":        "UNAVAILABLE",
+				"error.type":                      "RATE_LIMIT_EXCEEDED",
+				"gcp.errors.domain":               "googleapis.com",
+				"gcp.errors.metadata.quota_limit": "100",
+				"gcp.client.version":              "1.2.3",
+			},
+		},
+		{
+			name: "CLIENT_TIMEOUT",
+			err:  context.DeadlineExceeded,
+			setupCtx: func(ctx context.Context) (context.Context, context.CancelFunc) {
+				return context.WithDeadline(ctx, time.Now().Add(-1*time.Second))
+			},
+			want: map[string]any{
+				"level":                    "DEBUG",
+				"msg":                      "context deadline exceeded",
+				"rpc.system.name":          "grpc",
+				"rpc.response.status_code": "UNKNOWN",
+				"error.type":               "CLIENT_TIMEOUT",
+				"gcp.client.version":       "1.2.3",
+			},
+		},
+		{
+			name: "CLIENT_CANCELLED",
+			err:  context.Canceled,
+			setupCtx: func(ctx context.Context) (context.Context, context.CancelFunc) {
+				return context.WithCancel(ctx)
+			},
+			want: map[string]any{
+				"level":                    "DEBUG",
+				"msg":                      "context canceled",
+				"rpc.system.name":          "grpc",
+				"rpc.response.status_code": "UNKNOWN",
+				"error.type":               "CLIENT_CANCELLED",
+				"gcp.client.version":       "1.2.3",
+			},
+		},
+		{
+			name: "Fallback error type",
+			err:  errors.New("custom error"),
+			want: map[string]any{
+				"level":                    "DEBUG",
+				"msg":                      "custom error",
+				"rpc.system.name":          "grpc",
+				"rpc.response.status_code": "UNKNOWN",
+				"error.type":               "*errors.errorString",
+				"gcp.client.version":       "1.2.3",
+			},
+		},
+		{
+			name: "Empty Message Status",
+			err:  stEmptyMsg.Err(),
+			want: map[string]any{
+				"level":                    "DEBUG",
+				"msg":                      "API call failed",
+				"rpc.system.name":          "grpc",
+				"rpc.response.status_code": "INTERNAL",
+				"error.type":               "*status.Error",
+				"gcp.client.version":       "1.2.3",
+			},
+		},
 	}
 
-	var got map[string]any
-	if err := json.Unmarshal(logBuf.Bytes(), &got); err != nil {
-		t.Fatalf("failed to unmarshal log JSON: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var logBuf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			ctx := callctx.WithLoggerContext(context.Background(), logger)
 
-	want := map[string]any{
-		"level":                             "DEBUG",
-		"msg":                               "network timeout",
-		"rpc.system.name":                   "grpc",
-		"rpc.response.status_code":          "UNAVAILABLE",
-		"error.type":                        "RATE_LIMIT_EXCEEDED",
-		"gcp.errors.domain":                 "googleapis.com",
-		"gcp.errors.metadata.quota_limit":   "100",
-		"gcp.client.version":                "1.2.3",
-	}
+			if tt.setupCtx != nil {
+				var cancel context.CancelFunc
+				ctx, cancel = tt.setupCtx(ctx)
+				if cancel != nil {
+					cancel()
+					defer cancel()
+				}
+			}
 
-	// We can ignore dynamic fields like time.
-	if diff := cmp.Diff(want, got, cmpopts.IgnoreMapEntries(func(k string, v any) bool {
-		return k == "time"
-	})); diff != "" {
-		t.Errorf("Log attributes mismatch (-want +got):\n%s", diff)
-	}
-	logBuf.Reset()
+			staticLogAttrs := []slog.Attr{
+				slog.String("gcp.client.version", "1.2.3"),
+			}
 
-	ctx, cancel := context.WithDeadline(ctx, time.Now().Add(-1*time.Second))
-	defer cancel()
+			h := &otelHandler{
+				Handler:     &mockStatsHandler{},
+				staticAttrs: staticLogAttrs,
+				logger:      logger,
+			}
 
-	h.HandleRPC(ctx, &stats.End{Error: context.DeadlineExceeded})
-	logOutput = logBuf.String()
+			h.HandleRPC(ctx, &stats.End{Error: tt.err})
 
-	var got2 map[string]any
-	if err := json.Unmarshal(logBuf.Bytes(), &got2); err != nil {
-		t.Fatalf("failed to unmarshal log JSON: %v", err)
-	}
+			logOutput := logBuf.String()
+			if strings.Count(strings.TrimSpace(logOutput), "\n") > 0 {
+				t.Fatalf("Expected exactly 1 log record, got multiple: %s", logOutput)
+			}
 
-	want2 := map[string]any{
-		"level":                    "DEBUG",
-		"msg":                      "context deadline exceeded",
-		"rpc.system.name":          "grpc",
-		"rpc.response.status_code": "UNKNOWN",
-		"error.type":               "CLIENT_TIMEOUT",
-		"gcp.client.version":       "1.2.3",
-	}
+			var got map[string]any
+			if err := json.Unmarshal(logBuf.Bytes(), &got); err != nil {
+				t.Fatalf("failed to unmarshal log JSON: %v", err)
+			}
 
-	if diff := cmp.Diff(want2, got2, cmpopts.IgnoreMapEntries(func(k string, v any) bool {
-		return k == "time"
-	})); diff != "" {
-		t.Errorf("Log attributes mismatch (-want +got):\n%s", diff)
+			if _, ok := got["time"].(string); !ok {
+				t.Errorf("Expected time attribute of type string, got: %v", got["time"])
+			}
+			delete(got, "time")
+
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("Log attributes mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
