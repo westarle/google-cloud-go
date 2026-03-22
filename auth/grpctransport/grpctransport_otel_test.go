@@ -635,6 +635,13 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 	}
 	stWithReason, _ = stWithReason.WithDetails(ei)
 
+	stDifferentReason := status.New(grpccodes.PermissionDenied, "not allowed")
+	eiDiff := &errdetails.ErrorInfo{
+		Reason: "IAM_PERMISSION_DENIED",
+		Domain: "iam.googleapis.com",
+	}
+	stDifferentReason, _ = stDifferentReason.WithDetails(eiDiff)
+
 	stEmptyMsg := status.New(grpccodes.Internal, "")
 
 	tests := []struct {
@@ -655,6 +662,19 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 				"gcp.errors.domain":               "googleapis.com",
 				"gcp.errors.metadata.quota_limit": "100",
 				"gcp.client.version":              "1.2.3",
+			},
+		},
+		{
+			name: "Different ErrorInfo Reason and GRPC Status",
+			err:  stDifferentReason.Err(),
+			want: map[string]any{
+				"level":                    "DEBUG",
+				"msg":                      "not allowed",
+				"rpc.system.name":          "grpc",
+				"rpc.response.status_code": "PERMISSION_DENIED",
+				"error.type":               "IAM_PERMISSION_DENIED",
+				"gcp.errors.domain":        "iam.googleapis.com",
+				"gcp.client.version":       "1.2.3",
 			},
 		},
 		{
