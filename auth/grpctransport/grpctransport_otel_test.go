@@ -17,6 +17,7 @@ package grpctransport
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net"
 	"net/http"
@@ -650,29 +651,31 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 	h.HandleRPC(ctx, rs)
 
 	logOutput := logBuf.String()
-	if strings.Count(logOutput, "\n") > 1 && logOutput != "" {
+	if strings.Count(strings.TrimSpace(logOutput), "\n") > 0 {
 		t.Errorf("Expected exactly 1 log record, got multiple: %s", logOutput)
 	}
-	if !strings.Contains(logOutput, `"error.type":"RATE_LIMIT_EXCEEDED"`) {
-		t.Errorf("Expected log to contain error.type, got: %s", logOutput)
+
+	var got map[string]any
+	if err := json.Unmarshal(logBuf.Bytes(), &got); err != nil {
+		t.Fatalf("failed to unmarshal log JSON: %v", err)
 	}
-	if !strings.Contains(logOutput, `"msg":"network timeout"`) {
-		t.Errorf("Expected log to contain network timeout as msg, got: %s", logOutput)
+
+	want := map[string]any{
+		"level":                             "DEBUG",
+		"msg":                               "network timeout",
+		"rpc.system.name":                   "grpc",
+		"rpc.response.status_code":          "UNAVAILABLE",
+		"error.type":                        "RATE_LIMIT_EXCEEDED",
+		"gcp.errors.domain":                 "googleapis.com",
+		"gcp.errors.metadata.quota_limit":   "100",
+		"gcp.client.version":                "1.2.3",
 	}
-	if !strings.Contains(logOutput, `"rpc.response.status_code":"UNAVAILABLE"`) {
-		t.Errorf("Expected log to contain rpc.response.status_code, got: %s", logOutput)
-	}
-	if !strings.Contains(logOutput, `"rpc.system.name":"grpc"`) {
-		t.Errorf("Expected log to contain rpc.system.name, got: %s", logOutput)
-	}
-	if !strings.Contains(logOutput, `"gcp.client.version":"1.2.3"`) {
-		t.Errorf("Expected log to contain gcp.client.version, got: %s", logOutput)
-	}
-	if !strings.Contains(logOutput, `"gcp.errors.domain":"googleapis.com"`) {
-		t.Errorf("Expected log to contain gcp.errors.domain, got: %s", logOutput)
-	}
-	if !strings.Contains(logOutput, `"gcp.errors.metadata.quota_limit":"100"`) {
-		t.Errorf("Expected log to contain gcp.errors.metadata.quota_limit, got: %s", logOutput)
+
+	// We can ignore dynamic fields like time.
+	if diff := cmp.Diff(want, got, cmpopts.IgnoreMapEntries(func(k string, v any) bool {
+		return k == "time"
+	})); diff != "" {
+		t.Errorf("Log attributes mismatch (-want +got):\n%s", diff)
 	}
 	logBuf.Reset()
 
@@ -682,8 +685,24 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 	h.HandleRPC(ctx, &stats.End{Error: context.DeadlineExceeded})
 	logOutput = logBuf.String()
 
-	if !strings.Contains(logOutput, `"error.type":"CLIENT_TIMEOUT"`) {
-		t.Errorf("Expected log to contain CLIENT_TIMEOUT, got: %s", logOutput)
+	var got2 map[string]any
+	if err := json.Unmarshal(logBuf.Bytes(), &got2); err != nil {
+		t.Fatalf("failed to unmarshal log JSON: %v", err)
+	}
+
+	want2 := map[string]any{
+		"level":                    "DEBUG",
+		"msg":                      "context deadline exceeded",
+		"rpc.system.name":          "grpc",
+		"rpc.response.status_code": "UNKNOWN",
+		"error.type":               "CLIENT_TIMEOUT",
+		"gcp.client.version":       "1.2.3",
+	}
+
+	if diff := cmp.Diff(want2, got2, cmpopts.IgnoreMapEntries(func(k string, v any) bool {
+		return k == "time"
+	})); diff != "" {
+		t.Errorf("Log attributes mismatch (-want +got):\n%s", diff)
 	}
 }
 
