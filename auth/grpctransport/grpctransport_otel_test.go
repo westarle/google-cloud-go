@@ -816,6 +816,106 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 	}
 }
 
+func TestHandleRPC_TracingAndLogging(t *testing.T) {
+	gax.TestOnlyResetIsFeatureEnabled()
+	defer gax.TestOnlyResetIsFeatureEnabled()
+
+	tests := []struct {
+		name       string
+		logging    bool
+		recording  bool
+		setupCtx   func(context.Context) context.Context
+		wantLog    bool
+		wantResend int64
+	}{
+		{
+			name:      "both disabled",
+			logging:   false,
+			recording: false,
+			wantLog:   false,
+		},
+		{
+			name:      "tracing enabled, logging disabled",
+			logging:   false,
+			recording: true,
+			wantLog:   false,
+		},
+		{
+			name:      "tracing disabled, logging enabled with resend_count",
+			logging:   true,
+			recording: false,
+			setupCtx: func(ctx context.Context) context.Context {
+				return callctx.WithTelemetryContext(ctx, "resend_count", "3")
+			},
+			wantLog:    true,
+			wantResend: 3,
+		},
+		{
+			name:      "both enabled",
+			logging:   true,
+			recording: true,
+			wantLog:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.logging {
+				t.Setenv("GOOGLE_SDK_GO_EXPERIMENTAL_LOGGING", "true")
+			} else {
+				t.Setenv("GOOGLE_SDK_GO_EXPERIMENTAL_LOGGING", "false")
+			}
+			gax.TestOnlyResetIsFeatureEnabled()
+
+			var logBuf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			ctx := callctx.WithLoggerContext(context.Background(), logger)
+
+			if tt.setupCtx != nil {
+				ctx = tt.setupCtx(ctx)
+			}
+
+			h := &otelHandler{
+				Handler: &mockStatsHandler{},
+				logger:  logger,
+			}
+
+			span := oteltrace.SpanFromContext(ctx)
+			if tt.recording {
+				_, span = otel.Tracer("test").Start(ctx, "test-span")
+				defer span.End()
+			}
+			ctx = oteltrace.ContextWithSpan(ctx, span)
+
+			h.HandleRPC(ctx, &stats.End{Error: errors.New("test error")})
+
+			logOutput := logBuf.String()
+			hasLog := strings.TrimSpace(logOutput) != ""
+
+			if hasLog != tt.wantLog {
+				t.Errorf("got log: %v, want: %v\noutput: %s", hasLog, tt.wantLog, logOutput)
+			}
+
+			if tt.wantLog && tt.wantResend > 0 {
+				var got map[string]any
+				if err := json.Unmarshal(logBuf.Bytes(), &got); err != nil {
+					t.Fatalf("failed to unmarshal log JSON: %v", err)
+				}
+				if int64(got["gcp.grpc.resend_count"].(float64)) != tt.wantResend {
+					t.Errorf("got resend count: %v, want: %v", got["gcp.grpc.resend_count"], tt.wantResend)
+				}
+			}
+		})
+	}
+}
+
+func TestCodeToCanonicalStr(t *testing.T) {
+	// 9999 is out of bounds
+	if got := codeToCanonicalStr(grpccodes.Code(9999)); got != "UNKNOWN" {
+		t.Errorf("Expected UNKNOWN for out-of-bounds code, got: %s", got)
+	}
+}
+
 type mockStatsHandler struct{}
 
 func (m *mockStatsHandler) TagRPC(ctx context.Context, info *stats.RPCTagInfo) context.Context {

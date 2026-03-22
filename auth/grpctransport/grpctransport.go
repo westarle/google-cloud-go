@@ -627,9 +627,6 @@ func logActionableError(ctx context.Context, logger *slog.Logger, st *status.Sta
 	if msg == "" && st != nil {
 		msg = st.Message()
 	}
-	if msg == "" && err != nil && !isStatusOk {
-		msg = err.Error()
-	}
 	if msg == "" {
 		msg = "API call failed"
 	}
