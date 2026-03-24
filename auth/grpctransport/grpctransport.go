@@ -32,18 +32,15 @@ import (
 	"cloud.google.com/go/auth/internal/transport"
 	"cloud.google.com/go/auth/internal/transport/headers"
 	"github.com/googleapis/gax-go/v2"
-	"github.com/googleapis/gax-go/v2/apierror"
 	"github.com/googleapis/gax-go/v2/callctx"
 	"github.com/googleapis/gax-go/v2/internallog"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	grpccreds "google.golang.org/grpc/credentials"
 	grpcinsecure "google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/stats"
-	"google.golang.org/grpc/status"
 )
 
 const (
@@ -467,20 +464,23 @@ func addOpenTelemetryStatsHandler(dialOpts []grpc.DialOption, opts *Options) []g
 		return append(dialOpts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
 	}
 	var staticAttrs []attribute.KeyValue
-	var staticLogAttrs []slog.Attr
+	var scopedLogger *slog.Logger
 	if opts.InternalOptions != nil {
 		staticAttrs = transport.StaticTelemetryAttributes(opts.InternalOptions.TelemetryAttributes)
-		for _, attr := range staticAttrs {
-			staticLogAttrs = append(staticLogAttrs, slog.String(string(attr.Key), attr.Value.AsString()))
+		if gax.IsFeatureEnabled("LOGGING") && opts.Logger != nil {
+			var staticLogAttrs []any
+			for _, attr := range staticAttrs {
+				staticLogAttrs = append(staticLogAttrs, slog.String(string(attr.Key), attr.Value.AsString()))
+			}
+			scopedLogger = opts.Logger.With(staticLogAttrs...)
 		}
 	}
 	otelOpts := []otelgrpc.Option{
 		otelgrpc.WithSpanAttributes(staticAttrs...),
 	}
 	return append(dialOpts, grpc.WithStatsHandler(&otelHandler{
-		Handler:     otelgrpc.NewClientHandler(otelOpts...),
-		staticAttrs: staticLogAttrs,
-		logger:      opts.Logger,
+		Handler: otelgrpc.NewClientHandler(otelOpts...),
+		logger:  scopedLogger,
 	}))
 }
 
@@ -488,8 +488,7 @@ func addOpenTelemetryStatsHandler(dialOpts []grpc.DialOption, opts *Options) []g
 // adds custom Google Cloud-specific attributes to spans and metrics.
 type otelHandler struct {
 	stats.Handler
-	staticAttrs []slog.Attr
-	logger      *slog.Logger
+	logger *slog.Logger
 }
 
 // TagRPC intercepts the RPC start to extract dynamic attributes like resource
@@ -560,50 +559,17 @@ func (h *otelHandler) HandleRPC(ctx context.Context, s stats.RPCStats) {
 }
 
 func (h *otelHandler) handleRPCError(ctx context.Context, span trace.Span, logger *slog.Logger, end *stats.End) {
-	st, ok := status.FromError(end.Error)
-	rpcStatusCode := codeToCanonicalStr(st.Code())
-
-	var errorType string
-	// 1. Check if the local context expired or was cancelled. This is the only
-	// reliable way to distinguish a local client timeout from a server timeout
-	// because gRPC does not wrap context errors in its status.Error types.
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		errorType = "CLIENT_TIMEOUT"
-	} else if errors.Is(ctx.Err(), context.Canceled) {
-		errorType = "CLIENT_CANCELLED"
-	} else if !ok || st.Code() == codes.Unknown || st.Code() == codes.Internal {
-		// 2. If the error isn't a context breakdown and the gRPC framework
-		// doesn't "understand" it (returning ok=false or a generic catch-all
-		// bucket like Unknown/Internal), we "pack" the actual Go error type
-		// name into error.type (e.g., "*net.OpError"). This is per the error.type
-		// [spec](https://opentelemetry.io/docs/specs/semconv/registry/attributes/error/#error-type).
-		// "When error.type is set to a type (e.g., an exception type), its canonical
-		// class name identifying the type within the artifact SHOULD be used."
-		errorType = fmt.Sprintf("%T", end.Error)
-	} else {
-		// 3. Otherwise, it is a well-understood gRPC protocol error (e.g.,
-		// PERMISSION_DENIED) likely returned by the server.
-		errorType = rpcStatusCode
-	}
-
-	var apiErr *apierror.APIError
-	if parsedErr, parsedOk := apierror.ParseError(end.Error, false); parsedOk {
-		apiErr = parsedErr
-		// If there's an actionable error, the reason takes precedence over our calculated error type.
-		if reason := apiErr.Reason(); reason != "" {
-			errorType = reason
-		}
-	}
+	info := gax.ExtractTelemetryErrorInfo(ctx, end.Error)
 
 	if logger != nil {
-		logActionableError(ctx, logger, st, errorType, rpcStatusCode, h.staticAttrs, end.Error, apiErr, ok)
+		logActionableError(ctx, logger, info)
 	}
 
 	if span != nil {
 		attrs := []attribute.KeyValue{
-			attribute.String("error.type", errorType),
-			attribute.String("status.message", st.Message()),
-			attribute.String("rpc.response.status_code", rpcStatusCode),
+			attribute.String("error.type", info.ErrorType),
+			attribute.String("status.message", info.StatusMessage),
+			attribute.String("rpc.response.status_code", info.StatusCode),
 			attribute.String("exception.type", fmt.Sprintf("%T", end.Error)),
 		}
 		span.SetAttributes(attrs...)
@@ -619,12 +585,11 @@ func (h *otelHandler) handleRPCSuccess(span trace.Span) {
 	}
 }
 
-func logActionableError(ctx context.Context, logger *slog.Logger, st *status.Status, errorType string, rpcStatusCode string, staticAttrs []slog.Attr, err error, apiErr *apierror.APIError, isStatusOk bool) {
+func logActionableError(ctx context.Context, logger *slog.Logger, info gax.TelemetryErrorInfo) {
 	baseLogAttrs := []slog.Attr{
 		slog.String("rpc.system.name", "grpc"),
-		slog.String("rpc.response.status_code", rpcStatusCode),
+		slog.String("rpc.response.status_code", info.StatusCode),
 	}
-	baseLogAttrs = append(baseLogAttrs, staticAttrs...)
 
 	if resendCountStr, ok := callctx.TelemetryFromContext(ctx, "resend_count"); ok {
 		if count, e := strconv.Atoi(resendCountStr); e == nil {
@@ -632,42 +597,27 @@ func logActionableError(ctx context.Context, logger *slog.Logger, st *status.Sta
 		}
 	}
 
-	var msg string
-	if apiErr != nil && apiErr.GRPCStatus() != nil {
-		msg = apiErr.GRPCStatus().Message()
-	}
-	if msg == "" && st != nil {
-		msg = st.Message()
-	}
+	msg := info.StatusMessage
 	if msg == "" {
 		msg = "API call failed"
+	}
+
+	if rpcMethod, ok := callctx.TelemetryFromContext(ctx, "rpc_method"); ok {
+		baseLogAttrs = append(baseLogAttrs, slog.String("rpc.method", rpcMethod))
 	}
 
 	if resName, ok := callctx.TelemetryFromContext(ctx, "resource_name"); ok {
 		baseLogAttrs = append(baseLogAttrs, slog.String("gcp.resource.destination.id", resName))
 	}
 
-	if apiErr != nil {
-		if domain := apiErr.Domain(); domain != "" {
-			baseLogAttrs = append(baseLogAttrs, slog.String("gcp.errors.domain", domain))
-		}
-		for k, v := range apiErr.Metadata() {
-			baseLogAttrs = append(baseLogAttrs, slog.String("gcp.errors.metadata."+k, v))
-		}
+	if info.Domain != "" {
+		baseLogAttrs = append(baseLogAttrs, slog.String("gcp.errors.domain", info.Domain))
+	}
+	for k, v := range info.Metadata {
+		baseLogAttrs = append(baseLogAttrs, slog.String("gcp.errors.metadata."+k, v))
 	}
 
-	baseLogAttrs = append(baseLogAttrs, slog.String("error.type", errorType))
+	baseLogAttrs = append(baseLogAttrs, slog.String("error.type", info.ErrorType))
 
 	logger.LogAttrs(ctx, slog.LevelDebug, msg, baseLogAttrs...)
-}
-
-// codeToCanonicalStr returns the canonical name for each of the 17 gRPC
-// status codes defined in https://github.com/grpc/grpc-go/blob/master/codes/codes.go.
-// For any codes.Code that converts to an out-of-bounds int,
-// it returns "UNKNOWN".
-func codeToCanonicalStr(code codes.Code) string {
-	if int(code) >= 0 && int(code) < len(codeToStr) {
-		return codeToStr[code]
-	}
-	return "UNKNOWN"
 }

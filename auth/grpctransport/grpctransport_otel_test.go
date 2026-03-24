@@ -728,7 +728,7 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 				"level":                    "DEBUG",
 				"msg":                      "context deadline exceeded",
 				"rpc.system.name":          "grpc",
-				"rpc.response.status_code": "UNKNOWN",
+				"rpc.response.status_code": "DEADLINE_EXCEEDED",
 				"error.type":               "CLIENT_TIMEOUT",
 				"gcp.client.version":       "1.2.3",
 			},
@@ -743,7 +743,7 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 				"level":                    "DEBUG",
 				"msg":                      "context canceled",
 				"rpc.system.name":          "grpc",
-				"rpc.response.status_code": "UNKNOWN",
+				"rpc.response.status_code": "CANCELED",
 				"error.type":               "CLIENT_CANCELLED",
 				"gcp.client.version":       "1.2.3",
 			},
@@ -802,14 +802,13 @@ func TestHandleRPC_ActionableErrors(t *testing.T) {
 				}
 			}
 
-			staticLogAttrs := []slog.Attr{
+			staticLogAttrs := []any{
 				slog.String("gcp.client.version", "1.2.3"),
 			}
 
 			h := &otelHandler{
-				Handler:     &mockStatsHandler{},
-				staticAttrs: staticLogAttrs,
-				logger:      logger, // Notice: logger is passed here, but if LOGGING is false, HandleRPC sets internal logger=nil.
+				Handler: &mockStatsHandler{},
+				logger:  logger.With(staticLogAttrs...),
 			}
 
 			h.HandleRPC(ctx, &stats.End{Error: tt.err})
@@ -977,13 +976,6 @@ func TestDial_TracingAndLogging_Combinations(t *testing.T) {
 				t.Errorf("got tracing attrs: %v, want: %v", hasTracingAttrs, tt.wantTracingAttrs)
 			}
 		})
-	}
-}
-
-func TestCodeToCanonicalStr(t *testing.T) {
-	// 9999 is out of bounds
-	if got := codeToCanonicalStr(grpccodes.Code(9999)); got != "UNKNOWN" {
-		t.Errorf("Expected UNKNOWN for out-of-bounds code, got: %s", got)
 	}
 }
 
