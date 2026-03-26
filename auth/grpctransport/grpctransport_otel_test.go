@@ -621,6 +621,8 @@ func TestDial_OpenTelemetry_Disabled(t *testing.T) {
 }
 
 func TestHandleRPC_ActionableErrors(t *testing.T) {
+	// Do not add t.Parallel() to these tests. The global resetting will cause
+	// flaky tests because they will stomp over each other's feature flag state.
 	gax.TestOnlyResetIsFeatureEnabled()
 	defer gax.TestOnlyResetIsFeatureEnabled()
 	t.Setenv("GOOGLE_SDK_GO_EXPERIMENTAL_LOGGING", "true")
