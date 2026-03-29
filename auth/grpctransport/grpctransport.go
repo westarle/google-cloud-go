@@ -22,9 +22,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"cloud.google.com/go/auth"
 	"cloud.google.com/go/auth/credentials"
@@ -460,6 +462,9 @@ func addOpenTelemetryStatsHandler(dialOpts []grpc.DialOption, opts *Options) []g
 	if opts.DisableTelemetry {
 		return dialOpts
 	}
+	if gax.IsFeatureEnabled("METRICS") {
+		dialOpts = append(dialOpts, grpc.WithChainUnaryInterceptor(openTelemetryUnaryClientInterceptor()))
+	}
 	if !gax.IsFeatureEnabled("TRACING") && !gax.IsFeatureEnabled("LOGGING") {
 		return append(dialOpts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
 	}
@@ -475,13 +480,55 @@ func addOpenTelemetryStatsHandler(dialOpts []grpc.DialOption, opts *Options) []g
 			scopedLogger = opts.Logger.With(staticLogAttrs...)
 		}
 	}
-	otelOpts := []otelgrpc.Option{
-		otelgrpc.WithSpanAttributes(staticAttrs...),
+	var otelOpts []otelgrpc.Option
+	if gax.IsFeatureEnabled("TRACING") {
+		otelOpts = append(otelOpts, otelgrpc.WithSpanAttributes(staticAttrs...))
 	}
 	return append(dialOpts, grpc.WithStatsHandler(&otelHandler{
 		Handler: otelgrpc.NewClientHandler(otelOpts...),
 		logger:  scopedLogger,
 	}))
+}
+
+// Extract the host and port from a target address
+func extractHostPort(target string) (string, int) {
+	if idx := strings.Index(target, "://"); idx != -1 {
+		target = target[idx+3:]
+		// Ensure any trailing slashes from the scheme suffix are stripped
+		for strings.HasPrefix(target, "/") {
+			target = target[1:]
+		}
+	}
+	host, portStr, err := net.SplitHostPort(target)
+	if err != nil {
+		return target, 0
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return host, 0
+	}
+	return host, port
+}
+
+// openTelemetryUnaryClientInterceptor returns an interceptor that populates
+// TransportTelemetryData with the server peer address.
+func openTelemetryUnaryClientInterceptor() grpc.UnaryClientInterceptor {
+	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		transportData := gax.ExtractTransportTelemetry(ctx)
+		if transportData == nil {
+			return invoker(ctx, method, req, reply, cc, opts...)
+		}
+
+		err := invoker(ctx, method, req, reply, cc, opts...)
+
+		if target := cc.Target(); target != "" {
+			host, port := extractHostPort(target)
+			transportData.SetServerAddress(host)
+			transportData.SetServerPort(port)
+		}
+
+		return err
+	}
 }
 
 // otelHandler is a wrapper around the OpenTelemetry gRPC client handler that

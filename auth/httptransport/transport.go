@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"os"
 	"strconv"
 	"time"
@@ -180,6 +181,9 @@ func addOpenTelemetryTransport(trans http.RoundTripper, opts *Options) http.Roun
 	if opts.DisableTelemetry {
 		return trans
 	}
+	if gax.IsFeatureEnabled("METRICS") || gax.IsFeatureEnabled("TRACING") {
+		trans = &otelAttributeTransport{base: trans}
+	}
 	if !gax.IsFeatureEnabled("TRACING") {
 		return otelhttp.NewTransport(trans)
 	}
@@ -190,9 +194,7 @@ func addOpenTelemetryTransport(trans http.RoundTripper, opts *Options) http.Roun
 	otelOpts := []otelhttp.Option{
 		otelhttp.WithSpanOptions(trace.WithAttributes(staticAttrs...)),
 	}
-	return otelhttp.NewTransport(&otelAttributeTransport{
-		base: trans,
-	}, otelOpts...)
+	return otelhttp.NewTransport(trans, otelOpts...)
 }
 
 // otelAttributeTransport is a wrapper around an http.RoundTripper that adds
@@ -205,28 +207,52 @@ type otelAttributeTransport struct {
 // OpenTelemetry span with static and dynamic attributes, as well as detailed
 // error information.
 func (t *otelAttributeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	span := trace.SpanFromContext(req.Context())
-	if span.IsRecording() {
-		var attrs []attribute.KeyValue
-		attrs = append(attrs, attribute.String("rpc.system.name", "http"))
-		if resName, ok := callctx.TelemetryFromContext(req.Context(), "resource_name"); ok {
-			attrs = append(attrs, attribute.String("gcp.resource.destination.id", resName))
-		}
-		if resendCountStr, ok := callctx.TelemetryFromContext(req.Context(), "resend_count"); ok {
-			if count, err := strconv.Atoi(resendCountStr); err == nil {
-				attrs = append(attrs, attribute.Int("http.request.resend_count", count))
+	var span trace.Span
+	if gax.IsFeatureEnabled("TRACING") {
+		span = trace.SpanFromContext(req.Context())
+		if span.IsRecording() {
+			var attrs []attribute.KeyValue
+			attrs = append(attrs, attribute.String("rpc.system.name", "http"))
+			if resName, ok := callctx.TelemetryFromContext(req.Context(), "resource_name"); ok {
+				attrs = append(attrs, attribute.String("gcp.resource.destination.id", resName))
 			}
+			if resendCountStr, ok := callctx.TelemetryFromContext(req.Context(), "resend_count"); ok {
+				if count, err := strconv.Atoi(resendCountStr); err == nil {
+					attrs = append(attrs, attribute.Int("http.request.resend_count", count))
+				}
+			}
+			if urlTemplate, ok := callctx.TelemetryFromContext(req.Context(), "url_template"); ok {
+				attrs = append(attrs, attribute.String("url.template", urlTemplate))
+				span.SetName(fmt.Sprintf("%s %s", req.Method, urlTemplate))
+			}
+			span.SetAttributes(attrs...)
 		}
-		if urlTemplate, ok := callctx.TelemetryFromContext(req.Context(), "url_template"); ok {
-			attrs = append(attrs, attribute.String("url.template", urlTemplate))
-			span.SetName(fmt.Sprintf("%s %s", req.Method, urlTemplate))
+	}
+
+	var data *gax.TransportTelemetryData
+	if gax.IsFeatureEnabled("METRICS") {
+		data = gax.ExtractTransportTelemetry(req.Context())
+		if data != nil {
+			traceHook := &httptrace.ClientTrace{
+				GotConn: func(info httptrace.GotConnInfo) {
+					if info.Conn != nil && info.Conn.RemoteAddr() != nil {
+						host, portStr, err := net.SplitHostPort(info.Conn.RemoteAddr().String())
+						if err == nil {
+							data.SetServerAddress(host)
+							if port, pErr := strconv.Atoi(portStr); pErr == nil {
+								data.SetServerPort(port)
+							}
+						}
+					}
+				},
+			}
+			req = req.WithContext(httptrace.WithClientTrace(req.Context(), traceHook))
 		}
-		span.SetAttributes(attrs...)
 	}
 
 	resp, err := t.base.RoundTrip(req)
 
-	if span.IsRecording() {
+	if gax.IsFeatureEnabled("TRACING") && span != nil && span.IsRecording() {
 		if err != nil {
 			var errorType string
 			switch {
@@ -251,6 +277,13 @@ func (t *otelAttributeTransport) RoundTrip(req *http.Request) (*http.Response, e
 					attribute.String("status.message", resp.Status),
 				)
 			}
+		}
+	}
+
+	if data != nil && data.ServerAddress() == "" && req.URL != nil {
+		data.SetServerAddress(req.URL.Hostname())
+		if port, pErr := strconv.Atoi(req.URL.Port()); pErr == nil {
+			data.SetServerPort(port)
 		}
 	}
 
