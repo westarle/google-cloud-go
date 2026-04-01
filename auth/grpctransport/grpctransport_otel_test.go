@@ -1066,6 +1066,7 @@ func TestExtractHostPort(t *testing.T) {
 		{"xds:///my-service:80", "my-service", 80},
 		{"dns:///[::1]:8080", "::1", 8080},
 		{"google.com:foo", "google.com", 0},
+		{"dns://8.8.8.8/lb.example.com:443", "lb.example.com", 443},
 	}
 
 	for _, tt := range tests {

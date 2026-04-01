@@ -495,8 +495,10 @@ func addOpenTelemetryStatsHandler(dialOpts []grpc.DialOption, opts *Options, end
 func extractHostPort(target string) (string, int) {
 	if idx := strings.Index(target, "://"); idx != -1 {
 		target = target[idx+3:]
-		// Ensure any leading slashes from the scheme suffix are stripped
-		target = strings.TrimLeft(target, "/")
+		// Ensure any leading authorities (like 8.8.8.8 in dns://8.8.8.8/foo) are stripped
+		if slashIdx := strings.Index(target, "/"); slashIdx != -1 {
+			target = target[slashIdx+1:]
+		}
 	}
 	host, portStr, err := net.SplitHostPort(target)
 	if err != nil {
