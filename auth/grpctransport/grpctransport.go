@@ -496,9 +496,7 @@ func extractHostPort(target string) (string, int) {
 	if idx := strings.Index(target, "://"); idx != -1 {
 		target = target[idx+3:]
 		// Ensure any leading slashes from the scheme suffix are stripped
-		for strings.HasPrefix(target, "/") {
-			target = target[1:]
-		}
+		target = strings.TrimLeft(target, "/")
 	}
 	host, portStr, err := net.SplitHostPort(target)
 	if err != nil {
