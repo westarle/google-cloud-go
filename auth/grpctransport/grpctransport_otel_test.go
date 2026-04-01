@@ -1051,3 +1051,32 @@ func (m *mockStatsHandler) TagConn(ctx context.Context, info *stats.ConnTagInfo)
 }
 
 func (m *mockStatsHandler) HandleConn(ctx context.Context, cs stats.ConnStats) {}
+
+func TestExtractHostPort(t *testing.T) {
+	tests := []struct {
+		target   string
+		wantHost string
+		wantPort int
+	}{
+		{"localhost:8080", "localhost", 8080},
+		{"[::1]:443", "::1", 443},
+		{"google.com", "google.com", 0},
+		{"dns:///localhost:8080", "localhost", 8080},
+		{"dns:///google.com:443", "google.com", 443},
+		{"xds:///my-service:80", "my-service", 80},
+		{"dns:///[::1]:8080", "::1", 8080},
+		{"google.com:foo", "google.com", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.target, func(t *testing.T) {
+			gotHost, gotPort := extractHostPort(tt.target)
+			if gotHost != tt.wantHost {
+				t.Errorf("extractHostPort(%q) host = %q, want %q", tt.target, gotHost, tt.wantHost)
+			}
+			if gotPort != tt.wantPort {
+				t.Errorf("extractHostPort(%q) port = %v, want %v", tt.target, gotPort, tt.wantPort)
+			}
+		})
+	}
+}

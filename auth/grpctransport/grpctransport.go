@@ -370,7 +370,7 @@ func dial(ctx context.Context, secure bool, opts *Options) (*grpc.ClientConn, er
 	// Add tracing, but before the other options, so that clients can override the
 	// gRPC stats handler.
 	// This assumes that gRPC options are processed in order, left to right.
-	grpcOpts = addOpenTelemetryStatsHandler(grpcOpts, opts)
+	grpcOpts = addOpenTelemetryStatsHandler(grpcOpts, opts, transportCreds.Endpoint)
 	grpcOpts = append(grpcOpts, opts.GRPCDialOpts...)
 
 	return grpc.DialContext(ctx, transportCreds.Endpoint, grpcOpts...)
@@ -458,12 +458,13 @@ func (c *grpcCredentialsProvider) RequireTransportSecurity() bool {
 	return c.secure
 }
 
-func addOpenTelemetryStatsHandler(dialOpts []grpc.DialOption, opts *Options) []grpc.DialOption {
+func addOpenTelemetryStatsHandler(dialOpts []grpc.DialOption, opts *Options, endpoint string) []grpc.DialOption {
 	if opts.DisableTelemetry {
 		return dialOpts
 	}
 	if gax.IsFeatureEnabled("METRICS") {
-		dialOpts = append(dialOpts, grpc.WithChainUnaryInterceptor(openTelemetryUnaryClientInterceptor()))
+		host, port := extractHostPort(endpoint)
+		dialOpts = append(dialOpts, grpc.WithChainUnaryInterceptor(openTelemetryUnaryClientInterceptor(host, port)))
 	}
 	if !gax.IsFeatureEnabled("TRACING") && !gax.IsFeatureEnabled("LOGGING") {
 		return append(dialOpts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
@@ -494,7 +495,7 @@ func addOpenTelemetryStatsHandler(dialOpts []grpc.DialOption, opts *Options) []g
 func extractHostPort(target string) (string, int) {
 	if idx := strings.Index(target, "://"); idx != -1 {
 		target = target[idx+3:]
-		// Ensure any trailing slashes from the scheme suffix are stripped
+		// Ensure any leading slashes from the scheme suffix are stripped
 		for strings.HasPrefix(target, "/") {
 			target = target[1:]
 		}
@@ -512,20 +513,19 @@ func extractHostPort(target string) (string, int) {
 
 // openTelemetryUnaryClientInterceptor returns an interceptor that populates
 // TransportTelemetryData with the server peer address.
-func openTelemetryUnaryClientInterceptor() grpc.UnaryClientInterceptor {
+func openTelemetryUnaryClientInterceptor(host string, port int) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		transportData := gax.ExtractTransportTelemetry(ctx)
-		if transportData == nil {
-			return invoker(ctx, method, req, reply, cc, opts...)
+		if transportData != nil {
+			if host != "" {
+				transportData.SetServerAddress(host)
+			}
+			if port != 0 {
+				transportData.SetServerPort(port)
+			}
 		}
 
 		err := invoker(ctx, method, req, reply, cc, opts...)
-
-		if target := cc.Target(); target != "" {
-			host, port := extractHostPort(target)
-			transportData.SetServerAddress(host)
-			transportData.SetServerPort(port)
-		}
 
 		return err
 	}

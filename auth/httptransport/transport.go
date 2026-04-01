@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/http/httptrace"
 	"os"
 	"strconv"
 	"time"
@@ -232,21 +231,22 @@ func (t *otelAttributeTransport) RoundTrip(req *http.Request) (*http.Response, e
 	var data *gax.TransportTelemetryData
 	if gax.IsFeatureEnabled("METRICS") {
 		data = gax.ExtractTransportTelemetry(req.Context())
-		if data != nil {
-			traceHook := &httptrace.ClientTrace{
-				GotConn: func(info httptrace.GotConnInfo) {
-					if info.Conn != nil && info.Conn.RemoteAddr() != nil {
-						host, portStr, err := net.SplitHostPort(info.Conn.RemoteAddr().String())
-						if err == nil {
-							data.SetServerAddress(host)
-							if port, pErr := strconv.Atoi(portStr); pErr == nil {
-								data.SetServerPort(port)
-							}
-						}
-					}
-				},
+		if data != nil && req.URL != nil {
+			host := req.URL.Hostname()
+			if host != "" {
+				data.SetServerAddress(host)
 			}
-			req = req.WithContext(httptrace.WithClientTrace(req.Context(), traceHook))
+			portStr := req.URL.Port()
+			if portStr == "" {
+				if req.URL.Scheme == "https" {
+					portStr = "443"
+				} else if req.URL.Scheme == "http" {
+					portStr = "80"
+				}
+			}
+			if port, pErr := strconv.Atoi(portStr); pErr == nil {
+				data.SetServerPort(port)
+			}
 		}
 	}
 
@@ -277,13 +277,6 @@ func (t *otelAttributeTransport) RoundTrip(req *http.Request) (*http.Response, e
 					attribute.String("status.message", resp.Status),
 				)
 			}
-		}
-	}
-
-	if data != nil && data.ServerAddress() == "" && req.URL != nil {
-		data.SetServerAddress(req.URL.Hostname())
-		if port, pErr := strconv.Atoi(req.URL.Port()); pErr == nil {
-			data.SetServerPort(port)
 		}
 	}
 

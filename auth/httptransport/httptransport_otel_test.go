@@ -863,3 +863,47 @@ func TestNewClient_TracingAndMetrics_Combinations(t *testing.T) {
 		})
 	}
 }
+
+func TestTelemetryTransport_ImplicitPort(t *testing.T) {
+	gax.TestOnlyResetIsFeatureEnabled()
+	defer gax.TestOnlyResetIsFeatureEnabled()
+	t.Setenv("GOOGLE_SDK_GO_EXPERIMENTAL_METRICS", "true")
+
+	tests := []struct {
+		urlStr       string
+		expectedPort int
+	}{
+		{"http://example.com/foo", 80},
+		{"https://example.com/bar", 443},
+		{"http://example.com:8080/baz", 8080},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.urlStr, func(t *testing.T) {
+			ctx := context.Background()
+			data := &gax.TransportTelemetryData{}
+			ctx = gax.InjectTransportTelemetry(ctx, data)
+
+			req, err := http.NewRequestWithContext(ctx, "GET", tt.urlStr, nil)
+			if err != nil {
+				t.Fatalf("failed to create request: %v", err)
+			}
+
+			// we just want to test the transport round trip parsing, we mock the base roundtripper
+			base := &mockRoundTripper{}
+			trans := &otelAttributeTransport{base: base}
+
+			_, _ = trans.RoundTrip(req)
+
+			if data.ServerPort() != tt.expectedPort {
+				t.Errorf("for url %q, expected ServerPort to be %d, got %d", tt.urlStr, tt.expectedPort, data.ServerPort())
+			}
+		})
+	}
+}
+
+type mockRoundTripper struct{}
+
+func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: 200}, nil
+}
