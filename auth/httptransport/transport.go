@@ -418,8 +418,7 @@ func (b *errorTrackingBody) Read(p []byte) (n int, err error) {
 	n, err = b.ReadCloser.Read(p)
 
 	b.mu.Lock()
-	defer b.mu.Unlock()
-
+	shouldRecord := false
 	if !b.recorded {
 		if n > 0 {
 			remaining := maxErrorReadBytes - int64(b.buf.Len())
@@ -433,24 +432,37 @@ func (b *errorTrackingBody) Read(p []byte) (n int, err error) {
 		}
 
 		if err == io.EOF || int64(b.buf.Len()) >= maxErrorReadBytes {
-			b.recordErrorLocked()
+			shouldRecord = true
+			b.recorded = true
 		}
 	}
+	b.mu.Unlock()
+
+	if shouldRecord {
+		b.recordError()
+	}
+
 	return n, err
 }
 
 func (b *errorTrackingBody) Close() error {
 	b.mu.Lock()
-	if !b.recorded {
-		b.recordErrorLocked()
-	}
+	shouldRecord := !b.recorded
+	b.recorded = true
 	b.mu.Unlock()
-	return b.ReadCloser.Close()
+
+	// We can close the network stream immediately.
+	err := b.ReadCloser.Close()
+
+	// Do heavy in-memory telemetry parsing without holding the lock
+	if shouldRecord {
+		b.recordError() // If this panics here, the socket is already released
+	}
+
+	return err
 }
 
-func (b *errorTrackingBody) recordErrorLocked() {
-	b.recorded = true
-
+func (b *errorTrackingBody) recordError() {
 	errToParse := &googleapi.Error{
 		Code:    b.resp.StatusCode,
 		Message: b.resp.Status,
