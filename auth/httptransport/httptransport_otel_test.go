@@ -1507,7 +1507,7 @@ func TestTelemetryTransport_ImplicitPort(t *testing.T) {
 			}
 
 			// we just want to test the transport round trip parsing, we mock the base roundtripper
-			base := &mockRoundTripper{}
+			base := &mockRoundTripper{resp: &http.Response{StatusCode: 200}}
 			trans := &otelAttributeTransport{base: base}
 
 			_, _ = trans.RoundTrip(req)
@@ -1517,10 +1517,4 @@ func TestTelemetryTransport_ImplicitPort(t *testing.T) {
 			}
 		})
 	}
-}
-
-type mockRoundTripper struct{}
-
-func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	return &http.Response{StatusCode: 200}, nil
 }

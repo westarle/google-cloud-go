@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"cloud.google.com/go/auth"
@@ -44,6 +45,7 @@ import (
 
 const (
 	quotaProjectHeaderKey = "X-goog-user-project"
+	maxErrorReadBytes     = int64(8192) // 8KB
 )
 
 func newTransport(base http.RoundTripper, opts *Options) (http.RoundTripper, error) {
@@ -321,22 +323,15 @@ func (t *otelAttributeTransport) RoundTrip(req *http.Request) (*http.Response, e
 	return resp, err
 }
 
-func (t *otelAttributeTransport) onError(req *http.Request, resp *http.Response, err error, span trace.Span, logger *slog.Logger) {
+func (t *otelAttributeTransport) logAndSpanError(req *http.Request, resp *http.Response, errToParse error, netErr error, span trace.Span, logger *slog.Logger) {
 	var httpStatusCode int
 	if resp != nil {
 		httpStatusCode = resp.StatusCode
 	}
 
-	var errToParse error
-	if err != nil {
-		errToParse = err
-	} else if respErr := readResponseError(resp); respErr != nil {
-		errToParse = respErr
-	}
-
 	info := gax.ExtractTelemetryErrorInfo(req.Context(), errToParse)
 
-	if err == nil && resp != nil && resp.StatusCode >= 400 {
+	if netErr == nil && resp != nil && resp.StatusCode >= 400 {
 		if info.ErrorType == "*googleapi.Error" {
 			info.ErrorType = strconv.Itoa(resp.StatusCode)
 		}
@@ -390,11 +385,11 @@ func (t *otelAttributeTransport) onError(req *http.Request, resp *http.Response,
 	}
 
 	if span != nil {
-		if err != nil {
+		if netErr != nil {
 			span.SetAttributes(
 				attribute.String("error.type", info.ErrorType),
 				attribute.String("status.message", info.StatusMessage),
-				attribute.String("exception.type", fmt.Sprintf("%T", err)),
+				attribute.String("exception.type", fmt.Sprintf("%T", netErr)),
 			)
 		} else {
 			span.SetAttributes(
@@ -406,94 +401,80 @@ func (t *otelAttributeTransport) onError(req *http.Request, resp *http.Response,
 	}
 }
 
-type bodyReader struct {
-	io.Reader
-	orig io.ReadCloser
+type errorTrackingBody struct {
+	io.ReadCloser
+	req    *http.Request
+	resp   *http.Response
+	span   trace.Span
+	logger *slog.Logger
+	t      *otelAttributeTransport
+
+	mu       sync.Mutex
+	buf      bytes.Buffer
+	recorded bool
 }
 
-func (b *bodyReader) Close() error {
-	return b.orig.Close()
-}
+func (b *errorTrackingBody) Read(p []byte) (n int, err error) {
+	n, err = b.ReadCloser.Read(p)
 
-type errReader struct {
-	err error
-}
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
-func (e *errReader) Read(p []byte) (int, error) {
-	return 0, e.err
-}
+	if !b.recorded {
+		if n > 0 {
+			remaining := maxErrorReadBytes - int64(b.buf.Len())
+			if remaining > 0 {
+				if int64(n) > remaining {
+					b.buf.Write(p[:remaining])
+				} else {
+					b.buf.Write(p[:n])
+				}
+			}
+		}
 
-// cloneResponse reads the response body into memory and returns a shallow clone of the response
-// with an unexhausted stream, while transparently restoring the original response stream.
-//
-// This is necessary because we need to parse the error details for transport layer telemetry
-// but the downstream generated client also expects to read the response. Since error
-// responses are typically small and infrequent, the overhead of double-parsing is acceptable.
-// To prevent memory spikes and out-of-memory errors from unexpectedly large error responses,
-// we limit the bytes buffered in memory to 1MB. The original response will still be able to
-// read the full stream.
-func cloneResponse(resp *http.Response) (*http.Response, error) {
-	if resp == nil || resp.Body == nil || resp.Body == http.NoBody {
-		return resp, nil
+		if err == io.EOF || int64(b.buf.Len()) >= maxErrorReadBytes {
+			b.recordErrorLocked()
+		}
 	}
-
-	const maxErrorReadBytes = int64(1 << 20) // 1MB
-
-	var buf bytes.Buffer
-	if resp.ContentLength > 0 && resp.ContentLength <= maxErrorReadBytes {
-		buf.Grow(int(resp.ContentLength))
-	}
-
-	_, err := buf.ReadFrom(io.LimitReader(resp.Body, maxErrorReadBytes))
-	var reader io.Reader = bytes.NewReader(buf.Bytes())
-	if err != nil {
-		reader = io.MultiReader(reader, &errReader{err: err})
-	} else {
-		// Concatenate any unread portion of the stream back onto the end
-		reader = io.MultiReader(reader, resp.Body)
-	}
-	resp.Body = &bodyReader{Reader: reader, orig: resp.Body}
-
-	clone := *resp
-	clone.Body = io.NopCloser(bytes.NewReader(buf.Bytes()))
-	return &clone, err
+	return n, err
 }
 
-// readResponseError attempts to extract an actionable error payload from the HTTP response.
-// It clones the response stream up to a safe limit, parses the JSON error, and ensures
-// a baseline fallback message is always populated to guarantee high-quality telemetry.
-func readResponseError(resp *http.Response) error {
-	if resp == nil || resp.StatusCode < 400 {
-		return nil
+func (b *errorTrackingBody) Close() error {
+	b.mu.Lock()
+	if !b.recorded {
+		b.recordErrorLocked()
 	}
+	b.mu.Unlock()
+	return b.ReadCloser.Close()
+}
+
+func (b *errorTrackingBody) recordErrorLocked() {
+	b.recorded = true
 
 	errToParse := &googleapi.Error{
-		Code:    resp.StatusCode,
-		Message: resp.Status,
+		Code:    b.resp.StatusCode,
+		Message: b.resp.Status,
 	}
 
-	if resp.Body != nil {
-		clone, ioErr := cloneResponse(resp)
-		if ioErr == nil {
-			if errResp := googleapi.CheckResponse(clone); errResp != nil {
-				if gErr, ok := errResp.(*googleapi.Error); ok {
-					if gErr.Message == "" {
-						// Keep the default Status string if CheckResponse parsed no message.
-						gErr.Message = resp.Status
-					}
-					errToParse = gErr
-				} else {
-					// Fallback in case googleapi returns a different error implementation in the future
-					errToParse = &googleapi.Error{
-						Code:    resp.StatusCode,
-						Message: errResp.Error(),
-					}
+	if b.buf.Len() > 0 {
+		clone := *b.resp
+		clone.Body = io.NopCloser(bytes.NewReader(b.buf.Bytes()))
+		if errResp := googleapi.CheckResponse(&clone); errResp != nil {
+			if gErr, ok := errResp.(*googleapi.Error); ok {
+				if gErr.Message == "" {
+					gErr.Message = b.resp.Status
+				}
+				errToParse = gErr
+			} else {
+				errToParse = &googleapi.Error{
+					Code:    b.resp.StatusCode,
+					Message: errResp.Error(),
 				}
 			}
 		}
 	}
 
-	return errToParse
+	b.t.logAndSpanError(b.req, b.resp, errToParse, nil, b.span, b.logger)
 }
 
 type authTransport struct {
