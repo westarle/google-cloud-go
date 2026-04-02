@@ -23,20 +23,20 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/googleapis/gax-go/v2"
+	"github.com/googleapis/gax-go/v2/callctx"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
-	"github.com/googleapis/gax-go/v2/callctx"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
@@ -1086,19 +1086,19 @@ func TestErrorTrackingBody_EdgeCases(t *testing.T) {
 		bodySize := 10 * 1024
 		bodyData := bytes.Repeat([]byte("A"), bodySize)
 		resp := &http.Response{
-			StatusCode: 400,
-			Status:     "400 Bad Request",
-			Body:       io.NopCloser(bytes.NewReader(bodyData)),
+			StatusCode:    400,
+			Status:        "400 Bad Request",
+			Body:          io.NopCloser(bytes.NewReader(bodyData)),
 			ContentLength: -1,
 		}
-		
+
 		h, logBuf := setup(resp)
 		req, _ := http.NewRequestWithContext(context.Background(), "GET", "http://example.com", nil)
 		r, err := h.RoundTrip(req)
 		if err != nil {
 			t.Fatalf("RoundTrip error: %v", err)
 		}
-		
+
 		readBytes, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Fatalf("ReadAll error: %v", err)
@@ -1107,7 +1107,7 @@ func TestErrorTrackingBody_EdgeCases(t *testing.T) {
 			t.Errorf("read %d bytes, want %d", len(readBytes), bodySize)
 		}
 		r.Body.Close()
-		
+
 		if logBuf.Len() == 0 {
 			t.Fatal("expected log output")
 		}
@@ -1119,31 +1119,31 @@ func TestErrorTrackingBody_EdgeCases(t *testing.T) {
 		if msg != "400 Bad Request" {
 			t.Errorf("expected fallback message '400 Bad Request', got %q", msg)
 		}
-		})
+	})
 
-		t.Run("Early Close (Short Read)", func(t *testing.T) {
+	t.Run("Early Close (Short Read)", func(t *testing.T) {
 		bodyData := []byte(`{"error":{"message":"early close error"}}` + strings.Repeat(" ", 1000))
 		resp := &http.Response{
-			StatusCode: 400,
-			Status:     "400 Bad Request",
-			Body:       io.NopCloser(bytes.NewReader(bodyData)),
+			StatusCode:    400,
+			Status:        "400 Bad Request",
+			Body:          io.NopCloser(bytes.NewReader(bodyData)),
 			ContentLength: -1,
 		}
-		
+
 		h, logBuf := setup(resp)
 		req, _ := http.NewRequestWithContext(context.Background(), "GET", "http://example.com", nil)
 		r, err := h.RoundTrip(req)
 		if err != nil {
 			t.Fatalf("RoundTrip error: %v", err)
 		}
-		
+
 		buf := make([]byte, 10)
 		n, err := r.Body.Read(buf)
 		if err != nil || n != 10 {
 			t.Fatalf("expected 10 bytes, got %d, err %v", n, err)
 		}
 		r.Body.Close()
-		
+
 		if logBuf.Len() == 0 {
 			t.Fatal("expected log output on early close")
 		}
@@ -1159,23 +1159,23 @@ func TestErrorTrackingBody_EdgeCases(t *testing.T) {
 
 	t.Run("ContentLength Fast-Bypass", func(t *testing.T) {
 		resp := &http.Response{
-			StatusCode: 400,
-			Status:     "400 Bad Request",
-			Body:       io.NopCloser(bytes.NewReader(bytes.Repeat([]byte("A"), 8193))),
+			StatusCode:    400,
+			Status:        "400 Bad Request",
+			Body:          io.NopCloser(bytes.NewReader(bytes.Repeat([]byte("A"), 8193))),
 			ContentLength: 8193,
 		}
-		
+
 		h, logBuf := setup(resp)
 		req, _ := http.NewRequestWithContext(context.Background(), "GET", "http://example.com", nil)
 		r, err := h.RoundTrip(req)
 		if err != nil {
 			t.Fatalf("RoundTrip error: %v", err)
 		}
-		
+
 		if logBuf.Len() == 0 {
 			t.Fatal("expected immediate log output for >8KB ContentLength")
 		}
-		
+
 		var logEntry map[string]any
 		if err := json.Unmarshal(logBuf.Bytes(), &logEntry); err != nil {
 			t.Fatalf("failed to unmarshal log: %v", err)
@@ -1184,7 +1184,7 @@ func TestErrorTrackingBody_EdgeCases(t *testing.T) {
 		if msg != "400 Bad Request" {
 			t.Errorf("expected generic status message, got: %v", msg)
 		}
-		
+
 		if _, ok := r.Body.(*errorTrackingBody); ok {
 			t.Error("expected body NOT to be wrapped in errorTrackingBody")
 		}
@@ -1192,25 +1192,25 @@ func TestErrorTrackingBody_EdgeCases(t *testing.T) {
 
 	t.Run("Network Error During Read", func(t *testing.T) {
 		resp := &http.Response{
-			StatusCode: 500,
-			Status:     "500 Internal Server Error",
-			Body:       io.NopCloser(&errorReader{}),
+			StatusCode:    500,
+			Status:        "500 Internal Server Error",
+			Body:          io.NopCloser(&errorReader{}),
 			ContentLength: -1,
 		}
-		
+
 		h, logBuf := setup(resp)
 		req, _ := http.NewRequestWithContext(context.Background(), "GET", "http://example.com", nil)
 		r, err := h.RoundTrip(req)
 		if err != nil {
 			t.Fatalf("RoundTrip error: %v", err)
 		}
-		
+
 		_, readErr := io.ReadAll(r.Body)
 		if readErr == nil || readErr.Error() != "read error" {
 			t.Fatalf("expected 'read error', got %v", readErr)
 		}
 		r.Body.Close()
-		
+
 		if logBuf.Len() == 0 {
 			t.Fatal("expected log output even after read error")
 		}
@@ -1232,7 +1232,7 @@ func (h *spanCheckingHandler) Handle(ctx context.Context, r slog.Record) error {
 	return nil
 }
 func (h *spanCheckingHandler) WithAttrs(attrs []slog.Attr) slog.Handler { return h }
-func (h *spanCheckingHandler) WithGroup(name string) slog.Handler { return h }
+func (h *spanCheckingHandler) WithGroup(name string) slog.Handler       { return h }
 
 func TestActiveSpanDuringLog(t *testing.T) {
 	gax.TestOnlyResetIsFeatureEnabled()
@@ -1270,7 +1270,7 @@ func TestActiveSpanDuringLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client.Do() error: %v", err)
 	}
-	
+
 	// At this point, the response headers have been received but the body hasn't been read.
 	// The span should still be recording, and no log should have been emitted yet.
 	if handler.hasLog {
