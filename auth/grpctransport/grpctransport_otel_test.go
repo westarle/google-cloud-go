@@ -51,11 +51,13 @@ import (
 
 const (
 	keyRPCMethod     = attribute.Key("rpc.method")
-	keyRPCService    = attribute.Key("rpc.service")
-	keyRPCSystem     = attribute.Key("rpc.system")
-	keyRPCStatusCode = attribute.Key("rpc.grpc.status_code")
+	keyRPCSystem     = attribute.Key("rpc.system.name")
+	keyRPCStatusCode = attribute.Key("rpc.response.status_code")
 	keyServerAddr    = attribute.Key("server.address")
 	keyServerPort    = attribute.Key("server.port")
+	keyErrorType     = attribute.Key("error.type")
+	keyStatusMessage = attribute.Key("status.message")
+	keyExceptionType = attribute.Key("exception.type")
 
 	valRPCSystemGRPC = "grpc"
 	valLocalhost     = "127.0.0.1"
@@ -123,11 +125,10 @@ func TestDial_OpenTelemetry_Enabled(t *testing.T) {
 					Code: codes.Unset,
 				},
 				Attributes: []attribute.KeyValue{
-					keyRPCStatusCode.Int64(0),
-					keyRPCMethod.String("Echo"),
-					keyRPCService.String("echo.Echoer"),
+					keyRPCMethod.String("echo.Echoer/Echo"),
 					keyRPCSystem.String(valRPCSystemGRPC),
 					keyServerAddr.String(valLocalhost),
+					keyRPCStatusCode.String("OK"),
 				},
 			}.Snapshot(),
 			wantAttrKeys: []attribute.Key{keyServerPort},
@@ -146,14 +147,12 @@ func TestDial_OpenTelemetry_Enabled(t *testing.T) {
 					Description: "test error",
 				},
 				Attributes: []attribute.KeyValue{
-					keyRPCStatusCode.Int64(13),
-					keyRPCMethod.String("Echo"),
-					keyRPCService.String("echo.Echoer"),
+					keyRPCMethod.String("echo.Echoer/Echo"),
 					keyRPCSystem.String(valRPCSystemGRPC),
 					keyServerAddr.String(valLocalhost),
 					attribute.String("error.type", "*status.Error"),
 					attribute.String("status.message", "test error"),
-					attribute.String("rpc.response.status_code", "INTERNAL"),
+					keyRPCStatusCode.String("INTERNAL"),
 				},
 			}.Snapshot(),
 			wantAttrKeys: []attribute.Key{keyServerPort},
@@ -173,16 +172,14 @@ func TestDial_OpenTelemetry_Enabled(t *testing.T) {
 					Description: "context deadline exceeded",
 				},
 				Attributes: []attribute.KeyValue{
-					keyRPCStatusCode.Int64(4),
-					keyRPCMethod.String("Echo"),
-					keyRPCService.String("echo.Echoer"),
+					keyRPCMethod.String("echo.Echoer/Echo"),
 					keyRPCSystem.String(valRPCSystemGRPC),
 					keyServerAddr.String(valLocalhost),
-					attribute.String("error.type", "CLIENT_TIMEOUT"),
-					attribute.String("rpc.response.status_code", "DEADLINE_EXCEEDED"),
+					keyErrorType.String("CLIENT_TIMEOUT"),
+					keyRPCStatusCode.String("DEADLINE_EXCEEDED"),
 				},
 			}.Snapshot(),
-			wantAttrKeys: []attribute.Key{keyServerPort, attribute.Key("status.message"), attribute.Key("exception.type")},
+			wantAttrKeys: []attribute.Key{keyServerPort, keyStatusMessage, keyExceptionType},
 		},
 		{
 			name:      "telemetry enabled client cancelled",
@@ -199,16 +196,14 @@ func TestDial_OpenTelemetry_Enabled(t *testing.T) {
 					Description: "context canceled",
 				},
 				Attributes: []attribute.KeyValue{
-					keyRPCStatusCode.Int64(1),
-					keyRPCMethod.String("Echo"),
-					keyRPCService.String("echo.Echoer"),
+					keyRPCMethod.String("echo.Echoer/Echo"),
 					keyRPCSystem.String(valRPCSystemGRPC),
 					keyServerAddr.String(valLocalhost),
-					attribute.String("error.type", "CLIENT_CANCELLED"),
-					attribute.String("rpc.response.status_code", "CANCELED"),
+					keyErrorType.String("CLIENT_CANCELLED"),
+					keyRPCStatusCode.String("CANCELLED"),
 				},
 			}.Snapshot(),
-			wantAttrKeys: []attribute.Key{keyServerPort, attribute.Key("status.message"), attribute.Key("exception.type")},
+			wantAttrKeys: []attribute.Key{keyServerPort, keyStatusMessage, keyExceptionType},
 		},
 		{
 			name:   "telemetry disabled",
@@ -245,9 +240,7 @@ func TestDial_OpenTelemetry_Enabled(t *testing.T) {
 					Code: codes.Unset,
 				},
 				Attributes: []attribute.KeyValue{
-					keyRPCStatusCode.Int64(0),
-					keyRPCMethod.String("Echo"),
-					keyRPCService.String("echo.Echoer"),
+					keyRPCMethod.String("echo.Echoer/Echo"),
 					keyRPCSystem.String(valRPCSystemGRPC),
 					keyServerAddr.String(valLocalhost),
 					attribute.String("gcp.resource.destination.id", "my-resource"),
@@ -257,7 +250,7 @@ func TestDial_OpenTelemetry_Enabled(t *testing.T) {
 					attribute.String("gcp.client.artifact", "c.g/auth/grpctransport"),
 					attribute.String("gcp.client.language", "go"),
 					attribute.String("url.domain", "echo.googleapis.com"),
-					attribute.String("rpc.response.status_code", "OK"),
+					keyRPCStatusCode.String("OK"),
 				},
 			}.Snapshot(),
 			wantAttrKeys: []attribute.Key{keyServerPort},
@@ -412,11 +405,10 @@ func TestDial_OpenTelemetry_Disabled(t *testing.T) {
 					Code: codes.Unset,
 				},
 				Attributes: []attribute.KeyValue{
-					keyRPCStatusCode.Int64(0),
-					keyRPCMethod.String("Echo"),
-					keyRPCService.String("echo.Echoer"),
+					keyRPCMethod.String("echo.Echoer/Echo"),
 					keyRPCSystem.String(valRPCSystemGRPC),
 					keyServerAddr.String(valLocalhost),
+					keyRPCStatusCode.String("OK"),
 				},
 			}.Snapshot(),
 			wantAttrKeys: []attribute.Key{keyServerPort},
@@ -435,11 +427,10 @@ func TestDial_OpenTelemetry_Disabled(t *testing.T) {
 					Description: "test error",
 				},
 				Attributes: []attribute.KeyValue{
-					keyRPCStatusCode.Int64(13),
-					keyRPCMethod.String("Echo"),
-					keyRPCService.String("echo.Echoer"),
+					keyRPCMethod.String("echo.Echoer/Echo"),
 					keyRPCSystem.String(valRPCSystemGRPC),
 					keyServerAddr.String(valLocalhost),
+					keyRPCStatusCode.String("INTERNAL"),
 					// Standard OTel attributes only, NO strict error.type/status.message/grpc.status
 				},
 			}.Snapshot(),
@@ -460,11 +451,10 @@ func TestDial_OpenTelemetry_Disabled(t *testing.T) {
 					Description: "context deadline exceeded",
 				},
 				Attributes: []attribute.KeyValue{
-					keyRPCStatusCode.Int64(4),
-					keyRPCMethod.String("Echo"),
-					keyRPCService.String("echo.Echoer"),
+					keyRPCMethod.String("echo.Echoer/Echo"),
 					keyRPCSystem.String(valRPCSystemGRPC),
 					keyServerAddr.String(valLocalhost),
+					keyRPCStatusCode.String("DEADLINE_EXCEEDED"),
 				},
 			}.Snapshot(),
 			wantAttrKeys: []attribute.Key{keyServerPort},
@@ -484,11 +474,10 @@ func TestDial_OpenTelemetry_Disabled(t *testing.T) {
 					Description: "context canceled",
 				},
 				Attributes: []attribute.KeyValue{
-					keyRPCStatusCode.Int64(1),
-					keyRPCMethod.String("Echo"),
-					keyRPCService.String("echo.Echoer"),
+					keyRPCMethod.String("echo.Echoer/Echo"),
 					keyRPCSystem.String(valRPCSystemGRPC),
 					keyServerAddr.String(valLocalhost),
+					keyRPCStatusCode.String("CANCELLED"),
 				},
 			}.Snapshot(),
 			wantAttrKeys: []attribute.Key{keyServerPort},
@@ -523,11 +512,10 @@ func TestDial_OpenTelemetry_Disabled(t *testing.T) {
 					Code: codes.Unset,
 				},
 				Attributes: []attribute.KeyValue{
-					keyRPCStatusCode.Int64(0),
-					keyRPCMethod.String("Echo"),
-					keyRPCService.String("echo.Echoer"),
+					keyRPCMethod.String("echo.Echoer/Echo"),
 					keyRPCSystem.String(valRPCSystemGRPC),
 					keyServerAddr.String(valLocalhost),
+					keyRPCStatusCode.String("OK"),
 					// NO gcp.* attributes
 				},
 			}.Snapshot(),
