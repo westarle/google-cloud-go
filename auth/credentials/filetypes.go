@@ -131,7 +131,11 @@ func resolveUniverseDomain(optsUniverseDomain, fileUniverseDomain string) string
 
 func handleServiceAccount(f *credsfile.ServiceAccountFile, opts *DetectOptions) (auth.TokenProvider, error) {
 	ud := resolveUniverseDomain(opts.UniverseDomain, f.UniverseDomain)
-	if opts.UseSelfSignedJWT {
+	if ud != "" && ud != internalauth.DefaultUniverseDomain && opts.Subject != "" {
+		return nil, errors.New("credentials: domain-wide delegation is not supported for custom universe domains")
+	}
+
+	if opts.UseSelfSignedJWT && opts.Subject == "" {
 		return configureSelfSignedJWT(f, opts)
 	} else if ud != "" && ud != internalauth.DefaultUniverseDomain {
 		// For non-GDU universe domains, token exchange is impossible and services

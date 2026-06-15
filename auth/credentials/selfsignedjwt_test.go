@@ -218,3 +218,50 @@ func setupFakeKey() (*rsa.PrivateKey, []byte, error) {
 	}
 	return pk, bytes.Replace(jwtJSONKey, []byte(`"super secret key"`), enc, 1), nil
 }
+
+func TestDetectDefault_SubjectDisablesSelfSignedJWT(t *testing.T) {
+	_, jsonKey, err := setupFakeKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tp, err := DetectDefault(&DetectOptions{
+		CredentialsJSON:  jsonKey,
+		Scopes:           []string{"scope"},
+		UseSelfSignedJWT: true,
+		Subject:          "user@example.com",
+	})
+	if err != nil {
+		t.Fatalf("DetectDefault(%s): %v", jsonKey, err)
+	}
+
+	// This should fall back to 2LO token exchange, so the TokenProvider should not be selfSignedTokenProvider
+	// In Go, tp will be a CachedTokenProvider wrapping a 2LO token provider
+	// cannot easily check internal token provider type through Credentials struct, but we can verify it doesn\'t return a JWT Token immediately.
+	// A selfSignedTokenProvider doesn\'t make a network call and returns a JWT immediately.
+	// A 2LO token provider will make an HTTP call and fail because we don\'t have a real server, or it will return a non-JWT bearer.
+	// Let\'s check the token type or value, but since it makes a network call it will error out.
+	_, err = tp.Token(context.Background())
+	if err == nil {
+		t.Fatal("Expected error making network call for OAuth token, but succeeded (which implies it incorrectly used self-signed JWT without network call)")
+	}
+}
+
+func TestDetectDefault_CustomUniverseDomainWithSubjectThrowsError(t *testing.T) {
+	_, jsonKey, err := setupFakeKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Change universe_domain in JSON or via opts
+	_, err = DetectDefault(&DetectOptions{
+		CredentialsJSON:  jsonKey,
+		Scopes:           []string{"scope"},
+		UniverseDomain:   "mycustomdomain.com",
+		Subject:          "user@example.com",
+	})
+	if err == nil {
+		t.Fatal("Expected error for custom universe domain with subject, got nil")
+	}
+	if !strings.Contains(err.Error(), "domain-wide delegation is not supported for custom universe domains") {
+		t.Errorf("Unexpected error: %v", err)
+	}
+}
