@@ -1117,3 +1117,48 @@ func TestDefaultCredentials_OnGCE(t *testing.T) {
 		t.Errorf("log output missing 'metadata request': got %q", logBuf.String())
 	}
 }
+
+func TestDefaultCredentials_ServiceAccountKey_MalformedPrivateKey(t *testing.T) {
+	b, err := os.ReadFile("../internal/testdata/sa.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := credsfile.ParseServiceAccount(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.PrivateKey = "this is not a valid private key"
+	b, err = json.Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Case 1: UseSelfSignedJWT is false (default). Instantiation succeeds, token fetch fails.
+	creds, err := DetectDefault(&DetectOptions{
+		CredentialsJSON: b,
+		Scopes:          []string{"https://www.googleapis.com/auth/cloud-platform"},
+	})
+	if err != nil {
+		t.Fatalf("DetectDefault() failed: %v", err)
+	}
+	_, err = creds.Token(context.Background())
+	if err == nil {
+		t.Fatal("creds.Token() succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "failed to parse private key") {
+		t.Errorf("creds.Token() error = %q, want error containing %q", err.Error(), "failed to parse private key")
+	}
+
+	// Case 2: UseSelfSignedJWT is true. Instantiation fails.
+	_, err = DetectDefault(&DetectOptions{
+		CredentialsJSON:  b,
+		Scopes:           []string{"https://www.googleapis.com/auth/cloud-platform"},
+		UseSelfSignedJWT: true,
+	})
+	if err == nil {
+		t.Fatal("DetectDefault() succeeded with UseSelfSignedJWT=true, want error")
+	}
+	if !strings.Contains(err.Error(), "failed to parse private key") {
+		t.Errorf("DetectDefault() error = %q, want error containing %q", err.Error(), "failed to parse private key")
+	}
+}
