@@ -25,6 +25,9 @@ import (
 	"runtime"
 )
 
+var userCurrent = user.Current
+
+
 const (
 	// GoogleAppCredsEnvVar is the environment variable for setting the
 	// application default credentials.
@@ -56,7 +59,7 @@ func guessUnixHomeDir() string {
 	if v := os.Getenv("HOME"); v != "" {
 		return v
 	}
-	if u, err := user.Current(); err == nil {
+	if u, err := userCurrent(); err == nil {
 		return u.HomeDir
 	}
 	return ""

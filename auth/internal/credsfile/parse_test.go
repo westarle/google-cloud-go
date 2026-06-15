@@ -16,7 +16,9 @@ package credsfile
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
+	"os/user"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -303,3 +305,33 @@ func TestParseExternalAccountAuthorizedUser(t *testing.T) {
 		t.Errorf("(-want +got):\n%s", diff)
 	}
 }
+
+func TestWellKnownFileName_EmptyEnv(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("APPDATA", "")
+
+	oldUserCurrent := userCurrent
+	userCurrent = func() (*user.User, error) {
+		return nil, errors.New("mock error")
+	}
+	defer func() { userCurrent = oldUserCurrent }()
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("GetWellKnownFileName or guessUnixHomeDir panicked: %v", r)
+		}
+	}()
+
+	home := guessUnixHomeDir()
+	if home != "" {
+		t.Errorf("expected empty home, got %q", home)
+	}
+
+	wellKnown := GetWellKnownFileName()
+	t.Logf("GetWellKnownFileName returned: %q", wellKnown)
+
+	if wellKnown == "" {
+		t.Error("expected non-empty wellKnown path")
+	}
+}
+
