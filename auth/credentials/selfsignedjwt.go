@@ -85,5 +85,13 @@ func (tp *selfSignedTokenProvider) Token(context.Context) (*auth.Token, error) {
 		return nil, fmt.Errorf("credentials: could not encode JWT: %w", err)
 	}
 	tp.logger.Debug("created self-signed JWT", "token", tok)
-	return &auth.Token{Value: tok, Type: internal.TokenTypeBearer, Expiry: exp}, nil
+	tokFinal := &auth.Token{
+		Value:  tok,
+		Type:   internal.TokenTypeBearer,
+		Expiry: exp,
+		Metadata: map[string]interface{}{
+			"auth.google.credentialType": "jwt",
+		},
+	}
+	return tokFinal, nil
 }

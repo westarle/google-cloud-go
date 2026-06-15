@@ -42,6 +42,14 @@ func SetAuthHeader(token *auth.Token, req *http.Request) {
 			req.Header.Set("x-allowed-locations", headerVal)
 		}
 	}
+
+	if credType := token.MetadataString("auth.google.credentialType"); credType != "" {
+		if cur := req.Header.Get("x-goog-api-client"); cur != "" {
+			req.Header.Set("x-goog-api-client", cur+" cred-type/"+credType)
+		} else {
+			req.Header.Set("x-goog-api-client", "cred-type/"+credType)
+		}
+	}
 }
 
 // SetAuthMetadata uses the provided token to set the Authorization and regional
@@ -57,6 +65,14 @@ func SetAuthMetadata(ctx context.Context, token *auth.Token, reqURL string, m ma
 	if provider, ok := token.Metadata[regionalaccessboundary.ProviderKey].(regionalAccessBoundaryProvider); ok {
 		if headerVal := provider.GetHeaderValue(ctx, reqURL, token); headerVal != "" {
 			m["x-allowed-locations"] = headerVal
+		}
+	}
+
+	if credType := token.MetadataString("auth.google.credentialType"); credType != "" {
+		if cur := m["x-goog-api-client"]; cur != "" {
+			m["x-goog-api-client"] = cur + " cred-type/" + credType
+		} else {
+			m["x-goog-api-client"] = "cred-type/" + credType
 		}
 	}
 }
