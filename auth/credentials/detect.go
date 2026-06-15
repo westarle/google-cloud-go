@@ -216,6 +216,8 @@ type DetectOptions struct {
 	// Subject is the user email used for [domain wide delegation](https://developers.google.com/identity/protocols/oauth2/service-account#delegatingauthority).
 	// Optional.
 	Subject string
+	// PrivateClaims are additional claims to include in a self-signed JWT.
+	PrivateClaims map[string]interface{}
 	// EarlyTokenRefresh configures how early before a token expires that it
 	// should be refreshed. Once the token’s time until expiration has entered
 	// this refresh window the token is considered valid but stale. If unset,

@@ -45,22 +45,24 @@ func configureSelfSignedJWT(f *credsfile.ServiceAccountFile, opts *DetectOptions
 		return nil, fmt.Errorf("credentials: could not parse key: %w", err)
 	}
 	return &selfSignedTokenProvider{
-		email:    f.ClientEmail,
-		audience: opts.Audience,
-		scopes:   opts.scopes(),
-		signer:   signer,
-		pkID:     f.PrivateKeyID,
-		logger:   opts.logger(),
+		email:         f.ClientEmail,
+		audience:      opts.Audience,
+		scopes:        opts.scopes(),
+		signer:        signer,
+		pkID:          f.PrivateKeyID,
+		logger:        opts.logger(),
+		privateClaims: opts.PrivateClaims,
 	}, nil
 }
 
 type selfSignedTokenProvider struct {
-	email    string
-	audience string
-	scopes   []string
-	signer   crypto.Signer
-	pkID     string
-	logger   *slog.Logger
+	email         string
+	audience      string
+	scopes        []string
+	signer        crypto.Signer
+	pkID          string
+	logger        *slog.Logger
+	privateClaims map[string]interface{}
 }
 
 func (tp *selfSignedTokenProvider) Token(context.Context) (*auth.Token, error) {
@@ -68,12 +70,13 @@ func (tp *selfSignedTokenProvider) Token(context.Context) (*auth.Token, error) {
 	exp := iat.Add(time.Hour)
 	scope := strings.Join(tp.scopes, " ")
 	c := &jwt.Claims{
-		Iss:   tp.email,
-		Sub:   tp.email,
-		Aud:   tp.audience,
-		Scope: scope,
-		Iat:   iat.Unix(),
-		Exp:   exp.Unix(),
+		Iss:              tp.email,
+		Sub:              tp.email,
+		Aud:              tp.audience,
+		Scope:            scope,
+		Iat:              iat.Unix(),
+		Exp:              exp.Unix(),
+		AdditionalClaims: tp.privateClaims,
 	}
 	h := &jwt.Header{
 		Algorithm: jwt.HeaderAlgRSA256,

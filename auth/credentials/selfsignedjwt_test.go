@@ -218,3 +218,46 @@ func setupFakeKey() (*rsa.PrivateKey, []byte, error) {
 	}
 	return pk, bytes.Replace(jwtJSONKey, []byte(`"super secret key"`), enc, 1), nil
 }
+
+func TestDetectDefault_SelfSignedWithPrivateClaims(t *testing.T) {
+	privateKey, jsonKey, err := setupFakeKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tp, err := DetectDefault(&DetectOptions{
+		CredentialsJSON:  jsonKey,
+		Audience:         "audience", // This shouldn't normally be overridden by private claims conceptually, but private claims should be merged. Wait, if aud is in private claims, it overrides. But we can test it just inserts the private claims.
+		UseSelfSignedJWT: true,
+		PrivateClaims: map[string]interface{}{
+			"aud": "custom-audience",
+			"foo": "bar",
+		},
+	})
+	if err != nil {
+		t.Fatalf("DetectDefault(%s): %v", jsonKey, err)
+	}
+
+	tok, err := tp.Token(context.Background())
+	if err != nil {
+		t.Fatalf("Token(): %v", err)
+	}
+	err = jwt.VerifyJWS(tok.Value, &privateKey.PublicKey)
+	if err != nil {
+		t.Errorf("jwt.Verify(%q): %v", tok.Value, err)
+	}
+
+	claim, err := jwt.DecodeJWS(tok.Value)
+	if err != nil {
+		t.Fatalf("jwt.Decode(%q): %v", tok.Value, err)
+	}
+
+	// Audience might be overridden if the custom claims are marshaled and overwrite properties or are just kept separate?
+	// The jwt package handles it: "Marshal private claim set and then append it to b."
+	// Let's decode and check the additional claims.
+	if got, want := claim.AdditionalClaims["foo"], "bar"; got != want {
+		t.Errorf("claim.foo = %q, want %q", got, want)
+	}
+	if got, want := claim.AdditionalClaims["aud"], "custom-audience"; got != want {
+		t.Errorf("claim.aud = %q, want %q", got, want)
+	}
+}
