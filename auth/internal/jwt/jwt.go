@@ -46,7 +46,7 @@ const (
 type Header struct {
 	Algorithm string `json:"alg"`
 	Type      string `json:"typ"`
-	KeyID     string `json:"kid"`
+	KeyID     string `json:"kid,omitempty"`
 }
 
 func (h *Header) encode() (string, error) {
@@ -68,7 +68,7 @@ type Claims struct {
 	// Iat is the subject issued at claim. If unset, default is now.
 	Iat int64 `json:"iat"`
 	// Aud is the audience JWT claim. Optional.
-	Aud string `json:"aud"`
+	Aud string `json:"aud,omitempty"`
 	// Sub is the subject JWT claim. Optional.
 	Sub string `json:"sub,omitempty"`
 	// AdditionalClaims contains any additional non-standard JWT claims. Optional.

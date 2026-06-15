@@ -85,6 +85,18 @@ func TestDetectDefault_SelfSignedJSON(t *testing.T) {
 	if got, want := claim.Aud, "audience"; got != want {
 		t.Errorf("Aud = %q, want %q", got, want)
 	}
+	if claim.Scope != "" {
+		t.Errorf("Scope = %q, want empty", claim.Scope)
+	}
+
+	// Check Iat and Exp
+	now := time.Now().Unix()
+	if claim.Iat > now+5 || claim.Iat < now-15 {
+		t.Errorf("Iat = %v, want ~%v", claim.Iat, now)
+	}
+	if claim.Exp != claim.Iat+3600 {
+		t.Errorf("Exp = %v, want %v", claim.Exp, claim.Iat+3600)
+	}
 
 	// Finally, check the header private key.
 	tokParts := strings.Split(tok.Value, ".")
@@ -99,6 +111,18 @@ func TestDetectDefault_SelfSignedJSON(t *testing.T) {
 
 	if got, want := hdr.KeyID, "268f54e43a1af97cfc71731688434f45aca15c8b"; got != want {
 		t.Errorf("KeyID = %q, want %q", got, want)
+	}
+	if got, want := hdr.Algorithm, "RS256"; got != want {
+		t.Errorf("Algorithm = %q, want %q", got, want)
+	}
+	if got, want := hdr.Type, "JWT"; got != want {
+		t.Errorf("Type = %q, want %q", got, want)
+	}
+	if got, want := hdr.Algorithm, "RS256"; got != want {
+		t.Errorf("Algorithm = %q, want %q", got, want)
+	}
+	if got, want := hdr.Type, "JWT"; got != want {
+		t.Errorf("Type = %q, want %q", got, want)
 	}
 }
 
@@ -147,6 +171,18 @@ func TestDetectDefault_SelfSignedWithScope(t *testing.T) {
 	if got, want := claim.Scope, "scope1 scope2"; got != want {
 		t.Errorf("Aud = %q, want %q", got, want)
 	}
+	if claim.Aud != "" {
+		t.Errorf("Aud = %q, want empty", claim.Aud)
+	}
+
+	// Check Iat and Exp
+	now := time.Now().Unix()
+	if claim.Iat > now+5 || claim.Iat < now-15 {
+		t.Errorf("Iat = %v, want ~%v", claim.Iat, now)
+	}
+	if claim.Exp != claim.Iat+3600 {
+		t.Errorf("Exp = %v, want %v", claim.Exp, claim.Iat+3600)
+	}
 
 	// Finally, check the header private key.
 	tokParts := strings.Split(tok.Value, ".")
@@ -161,6 +197,80 @@ func TestDetectDefault_SelfSignedWithScope(t *testing.T) {
 
 	if got, want := hdr.KeyID, "268f54e43a1af97cfc71731688434f45aca15c8b"; got != want {
 		t.Errorf("KeyID = %q, want %q", got, want)
+	}
+	if got, want := hdr.Algorithm, "RS256"; got != want {
+		t.Errorf("Algorithm = %q, want %q", got, want)
+	}
+	if got, want := hdr.Type, "JWT"; got != want {
+		t.Errorf("Type = %q, want %q", got, want)
+	}
+}
+
+func TestDetectDefault_SelfSignedMissingKid(t *testing.T) {
+	privateKey, jsonKey, err := setupFakeKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Remove private_key_id from JSON
+	jsonKey = bytes.Replace(jsonKey, []byte(`"private_key_id": "268f54e43a1af97cfc71731688434f45aca15c8b",`), []byte(""), 1)
+	tp, err := DetectDefault(&DetectOptions{
+		CredentialsJSON:  jsonKey,
+		Audience:         "audience",
+		UseSelfSignedJWT: true,
+	})
+	if err != nil {
+		t.Fatalf("DetectDefault(%s): %v", jsonKey, err)
+	}
+
+	tok, err := tp.Token(context.Background())
+	if err != nil {
+		t.Fatalf("Token(): %v", err)
+	}
+	err = jwt.VerifyJWS(tok.Value, &privateKey.PublicKey)
+	if err != nil {
+		t.Errorf("jwt.Verify(%q): %v", tok.Value, err)
+	}
+
+	tokParts := strings.Split(tok.Value, ".")
+	hdrJSON, err := base64.RawURLEncoding.DecodeString(tokParts[0])
+	if err != nil {
+		t.Fatalf("DecodeString(%q): %v", tokParts[0], err)
+	}
+	var hdr jwt.Header
+	if err := json.Unmarshal(hdrJSON, &hdr); err != nil {
+		t.Fatalf("json.Unmarshal(%q): %v", hdrJSON, err)
+	}
+
+	if hdr.KeyID != "" {
+		t.Errorf("KeyID = %q, want empty", hdr.KeyID)
+	}
+}
+
+func TestDetectDefault_SelfSignedCaching(t *testing.T) {
+	_, jsonKey, err := setupFakeKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tp, err := DetectDefault(&DetectOptions{
+		CredentialsJSON:  jsonKey,
+		Audience:         "audience",
+		UseSelfSignedJWT: true,
+	})
+	if err != nil {
+		t.Fatalf("DetectDefault(%s): %v", jsonKey, err)
+	}
+
+	tok1, err := tp.Token(context.Background())
+	if err != nil {
+		t.Fatalf("Token(): %v", err)
+	}
+	tok2, err := tp.Token(context.Background())
+	if err != nil {
+		t.Fatalf("Token(): %v", err)
+	}
+
+	if tok1.Value != tok2.Value {
+		t.Errorf("Expected token string to be cached and reused, got %q and %q", tok1.Value, tok2.Value)
 	}
 }
 
