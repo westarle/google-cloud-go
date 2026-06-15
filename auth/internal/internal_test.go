@@ -16,6 +16,13 @@ package internal
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
+
 	"errors"
 	"net/http"
 	"reflect"
@@ -202,6 +209,64 @@ func TestRegionalAccessBoundaryHeader(t *testing.T) {
 			}
 			if gotPresent != tt.wantPresent {
 				t.Errorf("RegionalAccessBoundaryHeader() gotPresent = %v, want %v", gotPresent, tt.wantPresent)
+			}
+		})
+	}
+}
+
+
+
+func TestParseKey(t *testing.T) {
+	// Generate RSA key for PKCS1 and PKCS8
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate RSA key: %v", err)
+	}
+
+	// PKCS1
+	pkcs1Bytes := x509.MarshalPKCS1PrivateKey(rsaKey)
+	pkcs1Pem := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: pkcs1Bytes})
+
+	// PKCS8
+	pkcs8Bytes, err := x509.MarshalPKCS8PrivateKey(rsaKey)
+	if err != nil {
+		t.Fatalf("failed to marshal PKCS8: %v", err)
+	}
+	pkcs8Pem := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8Bytes})
+
+	// EC
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate EC key: %v", err)
+	}
+	ecBytes, err := x509.MarshalECPrivateKey(ecKey)
+	if err != nil {
+		t.Fatalf("failed to marshal EC: %v", err)
+	}
+	ecPem := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: ecBytes})
+
+	// Invalid
+	invalidKey := []byte("invalid-key-data")
+
+	tests := []struct {
+		name    string
+		key     []byte
+		wantErr bool
+	}{
+		{"PKCS1", pkcs1Pem, false},
+		{"PKCS8", pkcs8Pem, false},
+		{"EC", ecPem, false},
+		{"Raw PKCS1 (No PEM)", pkcs1Bytes, false},
+		{"Raw PKCS8 (No PEM)", pkcs8Bytes, false},
+		{"Raw EC (No PEM)", ecBytes, false},
+		{"Invalid Key", invalidKey, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseKey(tt.key)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ParseKey() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
