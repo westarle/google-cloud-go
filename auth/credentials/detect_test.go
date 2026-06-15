@@ -24,7 +24,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1117,3 +1119,51 @@ func TestDefaultCredentials_OnGCE(t *testing.T) {
 		t.Errorf("log output missing 'metadata request': got %q", logBuf.String())
 	}
 }
+
+func TestDetectDefault_WellKnownFileFallback_Unix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping Unix-specific fallback test on Windows")
+	}
+
+	tempDir := t.TempDir()
+	configDir := filepath.Join(tempDir, ".config", "gcloud")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	credsFilePath := filepath.Join(configDir, "application_default_credentials.json")
+
+	credsJSON, err := os.ReadFile("../internal/testdata/sa.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(credsFilePath, credsJSON, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv(credsfile.GoogleAppCredsEnvVar, "")
+	t.Setenv("HOME", tempDir)
+
+	oldAllowOnGCE := allowOnGCECheck
+	allowOnGCECheck = false
+	defer func() { allowOnGCECheck = oldAllowOnGCE }()
+
+	creds, err := DetectDefault(&DetectOptions{
+		Scopes: []string{"https://www.googleapis.com/auth/cloud-platform"},
+	})
+	if err != nil {
+		t.Fatalf("DetectDefault() failed: %v", err)
+	}
+	if creds == nil {
+		t.Fatal("expected credentials, got nil")
+	}
+
+	ctx := context.Background()
+	projID, err := creds.ProjectID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projID != "fake_project" {
+		t.Errorf("got project ID %q, want %q", projID, "fake_project")
+	}
+}
+
