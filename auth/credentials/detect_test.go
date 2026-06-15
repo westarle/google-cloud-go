@@ -164,7 +164,17 @@ func TestDefaultCredentials_ImpersonatedServiceAccountKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if !strings.HasPrefix(authHeader, "Bearer ") {
+			t.Errorf("Expected Bearer token in Authorization header, got %q", authHeader)
+		}
+		// A JWT token typically has two dots (three parts)
+		tokenParts := strings.Split(strings.TrimPrefix(authHeader, "Bearer "), ".")
+		if len(tokenParts) != 3 {
+			t.Errorf("Expected valid JWT token, got %q", authHeader)
+		}
 		resp := &struct {
+
 			AccessToken string `json:"accessToken"`
 			ExpireTime  string `json:"expireTime"`
 		}{
