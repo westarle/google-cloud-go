@@ -86,6 +86,20 @@ func TestNewCredentials(t *testing.T) {
 			wantErrMsg: "invalid character",
 		},
 		{
+			name:       "ServiceAccount_MissingPrivateKey",
+			credType:   ServiceAccount,
+			json:       []byte(`{"type": "service_account", "client_email": "gopher@fake_project.iam.gserviceaccount.com"}`),
+			wantErr:    true,
+			wantErrMsg: "private key must be provided",
+		},
+		{
+			name:       "ServiceAccount_MissingClientEmail",
+			credType:   ServiceAccount,
+			json:       []byte(`{"type": "service_account", "private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"}`),
+			wantErr:    true,
+			wantErrMsg: "email must be provided",
+		},
+		{
 			name:       "Error_MissingTypeField_FromJSON",
 			credType:   ServiceAccount,
 			json:       []byte(`{"project_id": "my-proj"}`),
