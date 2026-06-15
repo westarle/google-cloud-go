@@ -1117,3 +1117,25 @@ func TestDefaultCredentials_OnGCE(t *testing.T) {
 		t.Errorf("log output missing 'metadata request': got %q", logBuf.String())
 	}
 }
+
+func TestDetectDefault_GoogleApplicationCredentials(t *testing.T) {
+	t.Setenv(credsfile.GoogleAppCredsEnvVar, "../internal/testdata/sa.json")
+
+	creds, err := DetectDefault(&DetectOptions{})
+	if err != nil {
+		t.Fatalf("DetectDefault() failed: %v", err)
+	}
+
+	if creds == nil {
+		t.Fatal("DetectDefault() returned nil credentials")
+	}
+	ctx := context.Background()
+	projectID, err := creds.ProjectID(ctx)
+	if err != nil {
+		t.Fatalf("creds.ProjectID() failed: %v", err)
+	}
+	if want := "fake_project"; projectID != want {
+		t.Errorf("ProjectID = %q, want %q", projectID, want)
+	}
+}
+
