@@ -37,6 +37,9 @@ var (
 // configureSelfSignedJWT uses the private key in the service account to create
 // a JWT without making a network call.
 func configureSelfSignedJWT(f *credsfile.ServiceAccountFile, opts *DetectOptions) (auth.TokenProvider, error) {
+	if f.ClientEmail == "" {
+		return nil, errors.New("credentials: client_email is missing from the service account key")
+	}
 	if len(opts.scopes()) == 0 && opts.Audience == "" {
 		return nil, errors.New("credentials: both scopes and audience are empty")
 	}

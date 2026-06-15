@@ -27,12 +27,29 @@ func TestNewCredentials(t *testing.T) {
 	tests := []struct {
 		name       string
 		credType   CredType
-		json       []byte // Use raw JSON to test more cases
-		file       string // For file-based tests
+		json       []byte
+		file       string
 		wantErr    bool
-		wantErrMsg string // New field to check for specific error messages
-		wantCreds  bool   // New field to check for non-nil creds on success
+		wantErrMsg string
+		wantCreds  bool
+		opts       *DetectOptions
 	}{
+		{
+			name:       "Error_ServiceAccount_MissingPrivateKey",
+			credType:   ServiceAccount,
+			json:       []byte(`{"type": "service_account", "client_email": "foo@bar.com"}`),
+			wantErr:    true,
+			wantErrMsg: "auth: private key must be provided", // this will fail parsing key because it's empty
+		},
+		{
+			name:       "Error_ServiceAccount_SelfSigned_MissingClientEmail",
+			credType:   ServiceAccount,
+			json:       []byte(`{"type": "service_account", "private_key": "foo"}`),
+			wantErr:    true,
+			wantErrMsg: "client_email is missing",
+            opts:       &DetectOptions{UseSelfSignedJWT: true, Scopes: []string{"foo"}},
+		},
+
 		// Happy Paths
 		{
 			name:      "ServiceAccount_Success_FromFile",
@@ -115,10 +132,14 @@ func TestNewCredentials(t *testing.T) {
 
 			if tt.file != "" {
 				// Test NewCredentialsFromFile
-				creds, err = NewCredentialsFromFile(tt.credType, tt.file, &DetectOptions{})
+				opts := tt.opts
+				if opts == nil { opts = &DetectOptions{} }
+				creds, err = NewCredentialsFromFile(tt.credType, tt.file, opts)
 			} else {
 				// Test NewCredentialsFromJSON
-				creds, err = NewCredentialsFromJSON(tt.credType, tt.json, &DetectOptions{})
+				opts := tt.opts
+				if opts == nil { opts = &DetectOptions{} }
+				creds, err = NewCredentialsFromJSON(tt.credType, tt.json, opts)
 			}
 
 			if (err != nil) != tt.wantErr {
