@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build integration
+
 package pubsub
 
 import (
@@ -72,28 +74,12 @@ func extractMessageData(m *Message) messageData {
 	}
 }
 
-func withGRPCHeadersAssertion(t *testing.T, opts ...option.ClientOption) []option.ClientOption {
-	grpcHeadersEnforcer := &testutil.HeadersEnforcer{
-		OnFailure: t.Errorf,
-		Checkers: []*testutil.HeaderChecker{
-			testutil.XGoogClientHeaderChecker,
-		},
-	}
-	return append(grpcHeadersEnforcer.CallOptions(), opts...)
-}
-
 func integrationTestClient(ctx context.Context, t *testing.T, opts ...option.ClientOption) *Client {
-	if testing.Short() {
-		t.Skip("Integration tests skipped in short mode")
-	}
 	projID := testutil.ProjID()
 	if projID == "" {
-		t.Skip("Integration tests skipped. See CONTRIBUTING.md for details")
+		projID = "opt-in-integration-test-dummy-project"
 	}
 	ts := testutil.TokenSource(ctx, ScopePubSub, ScopeCloudPlatform)
-	if ts == nil {
-		t.Skip("Integration tests skipped. See CONTRIBUTING.md for details")
-	}
 	opts = append(withGRPCHeadersAssertion(t, option.WithTokenSource(ts)), opts...)
 	client, err := NewClient(ctx, projID, opts...)
 	if err != nil {
@@ -103,17 +89,11 @@ func integrationTestClient(ctx context.Context, t *testing.T, opts ...option.Cli
 }
 
 func integrationTestSchemaClient(ctx context.Context, t *testing.T, opts ...option.ClientOption) *SchemaClient {
-	if testing.Short() {
-		t.Skip("Integration tests skipped in short mode")
-	}
 	projID := testutil.ProjID()
 	if projID == "" {
-		t.Skip("Integration tests skipped. See CONTRIBUTING.md for details")
+		projID = "opt-in-integration-test-dummy-project"
 	}
 	ts := testutil.TokenSource(ctx, ScopePubSub, ScopeCloudPlatform)
-	if ts == nil {
-		t.Skip("Integration tests skipped. See CONTRIBUTING.md for details")
-	}
 	opts = append(withGRPCHeadersAssertion(t, option.WithTokenSource(ts)), opts...)
 	sc, err := NewSchemaClient(ctx, projID, opts...)
 	if err != nil {
